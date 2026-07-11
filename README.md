@@ -1,4 +1,3 @@
-cat > "README.md" <<'EOF'
 # Mobile Robotic Manipulator
 
 A modular robotics project combining a six-wheel unmanned ground vehicle with a six-degree-of-freedom robotic manipulator.
