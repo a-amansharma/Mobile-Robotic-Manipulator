@@ -1,0 +1,40 @@
+cat > ".gitignore" <<'EOF'
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Arduino build files
+build/
+*.bin
+*.elf
+*.hex
+*.map
+
+# Processing generated files
+application.macosx/
+application.windows*/
+application.linux*/
+output/
+
+# IDE and editor settings
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary and backup files
+*.tmp
+*.temp
+*.bak
+*~
+
+# Logs
+*.log
+
+# Environment and secret files
+.env
+.env.*
+secrets.h
+credentials.h
+EOF
