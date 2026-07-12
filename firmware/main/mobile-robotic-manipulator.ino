@@ -35,8 +35,15 @@ const uint8_t LEFT_LPWM_CHANNEL = 1;
 const uint8_t RIGHT_RPWM_CHANNEL = 2;
 const uint8_t RIGHT_LPWM_CHANNEL = 3;
 
-const int MOTOR_SPEED_LIMIT = 220;
+const int MOTOR_SPEED_LIMIT = 255;
 const int JOYSTICK_DEADZONE = 8;
+const int MOTOR_RAMP_STEP = 5;
+const unsigned long MOTOR_RAMP_INTERVAL_MS = 12;
+int targetLeftMotor = 0;
+int targetRightMotor = 0;
+int currentLeftMotor = 0;
+int currentRightMotor = 0;
+unsigned long lastMotorRampTime = 0;
 
 const unsigned long MOTOR_COMMAND_TIMEOUT_MS = 650;
 
@@ -107,1126 +114,28 @@ int armAngleC = 8;
 int armAngleD = 8;
 int armAngleE = 67;
 int armAngleF = 105;
+int targetArmA = 0;
+int targetArmB = 0;
+int targetArmC = 8;
+int targetArmD = 8;
+int targetArmE = 67;
+int targetArmF = 105;
+const unsigned long SERVO_RAMP_INTERVAL_MS = 12;
+unsigned long lastServoRampTime = 0;
 
 const char WEBPAGE[] PROGMEM = R"rawliteral(
-<!DOCTYPE html>
-<html lang="en">
-
-<head>
-
-<meta charset="UTF-8">
-
-<meta
-  name="viewport"
-  content="width=device-width,
-           initial-scale=1,
-           maximum-scale=1,
-           user-scalable=no,
-           viewport-fit=cover"
->
-
-<title>Mobile Robotic Manipulator</title>
-
-<style>
-
-:root {
-  --bg-top: #16243a;
-  --bg-bottom: #05080e;
-  --panel-top: #263750;
-  --panel-bottom: #101827;
-  --inner-top: #1c2a40;
-  --inner-bottom: #0c121d;
-  --text: #f4f8ff;
-  --muted: #9baac0;
-  --blue: #3cbcff;
-  --blue-dark: #0879bb;
-  --green: #45e59b;
-  --red: #ff4e5c;
-  --amber: #ffc24a;
-  --track: #35445a;
-}
-
-* {
-  box-sizing: border-box;
-  user-select: none;
-  -webkit-user-select: none;
-  -webkit-tap-highlight-color: transparent;
-}
-
-html,
-body {
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  overflow: hidden;
-  overscroll-behavior: none;
-  background:
-    radial-gradient(circle at 50% -20%, #29466f 0%, transparent 48%),
-    linear-gradient(180deg, var(--bg-top), var(--bg-bottom));
-  color: var(--text);
-  font-family: Montserrat, Arial, Helvetica, sans-serif;
-}
-
-body {
-  padding:
-    env(safe-area-inset-top)
-    env(safe-area-inset-right)
-    env(safe-area-inset-bottom)
-    env(safe-area-inset-left);
-}
-
-.app {
-  width: 100%;
-  max-width: 760px;
-  height: 100dvh;
-  margin: auto;
-  padding: 7px;
-  display: grid;
-  grid-template-rows: 44% 56%;
-  gap: 7px;
-}
-
-.panel {
-  position: relative;
-  min-height: 0;
-  overflow: hidden;
-  border-radius: 22px;
-  border: 1px solid rgba(255, 255, 255, 0.11);
-  background:
-    linear-gradient(145deg, var(--panel-top), var(--panel-bottom));
-  box-shadow:
-    0 18px 35px rgba(0, 0, 0, 0.48),
-    inset 0 1px 1px rgba(255, 255, 255, 0.14),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.75);
-}
-
-.panel::before {
-  content: "";
-  position: absolute;
-  inset: 1px 12% auto;
-  height: 1px;
-  background:
-    linear-gradient(
-      90deg,
-      transparent,
-      rgba(255, 255, 255, 0.35),
-      transparent
-    );
-}
-
-.panel-title {
-  height: 35px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  text-transform: uppercase;
-  letter-spacing: 1.2px;
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--green);
-  box-shadow:
-    0 0 5px var(--green),
-    0 0 12px var(--green);
-}
-
-.drive-layout {
-  height: calc(100% - 35px);
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 115px;
-  gap: 8px;
-  padding: 3px 12px 11px;
-}
-
-.joystick-container {
-  min-height: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.joystick {
-  position: relative;
-  width: min(52vw, 225px);
-  height: min(52vw, 225px);
-  max-height: 100%;
-  aspect-ratio: 1;
-  border-radius: 50%;
-  touch-action: none;
-
-  background:
-    radial-gradient(
-      circle at 36% 28%,
-      #4c6281 0%,
-      #273a56 25%,
-      #111b2a 67%,
-      #070b12 100%
-    );
-
-  border: 2px solid rgba(255, 255, 255, 0.13);
-
-  box-shadow:
-    inset 8px 8px 18px rgba(255, 255, 255, 0.05),
-    inset -15px -18px 26px rgba(0, 0, 0, 0.76),
-    0 13px 21px rgba(0, 0, 0, 0.47),
-    0 0 0 5px rgba(0, 0, 0, 0.13);
-}
-
-.joystick::before,
-.joystick::after {
-  content: "";
-  position: absolute;
-  pointer-events: none;
-  background: rgba(255, 255, 255, 0.08);
-}
-
-.joystick::before {
-  width: 1px;
-  height: 82%;
-  top: 9%;
-  left: 50%;
-}
-
-.joystick::after {
-  width: 82%;
-  height: 1px;
-  top: 50%;
-  left: 9%;
-}
-
-.stick {
-  position: absolute;
-  width: 36%;
-  height: 36%;
-  left: 32%;
-  top: 32%;
-  border-radius: 50%;
-  pointer-events: none;
-
-  background:
-    radial-gradient(
-      circle at 30% 22%,
-      #d4f4ff 0%,
-      #7fd9ff 12%,
-      #31b9ff 38%,
-      #0879bc 72%,
-      #034b77 100%
-    );
-
-  border: 2px solid rgba(255, 255, 255, 0.52);
-
-  box-shadow:
-    inset 6px 7px 9px rgba(255, 255, 255, 0.23),
-    inset -8px -10px 12px rgba(0, 0, 0, 0.35),
-    0 10px 17px rgba(0, 0, 0, 0.52),
-    0 0 20px rgba(60, 188, 255, 0.42);
-
-  transform: translate(0, 0);
-}
-
-.drive-side {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 7px;
-}
-
-.mini-card {
-  padding: 7px 5px;
-  border-radius: 13px;
-  text-align: center;
-  background:
-    linear-gradient(145deg, #1c2a40, #0b111c);
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.07),
-    0 5px 10px rgba(0, 0, 0, 0.28);
-}
-
-.mini-label {
-  color: var(--muted);
-  font-size: 7px;
-  font-weight: 700;
-  letter-spacing: 0.8px;
-  text-transform: uppercase;
-}
-
-.mini-value {
-  margin-top: 2px;
-  font-size: 15px;
-  font-weight: 900;
-}
-
-.tilt-card {
-  transition: 0.2s ease;
-}
-
-.tilt-card.danger {
-  background:
-    linear-gradient(145deg, #9f2731, #3a0b10);
-  border-color: rgba(255, 90, 100, 0.85);
-  box-shadow:
-    0 0 17px rgba(255, 78, 92, 0.42),
-    inset 0 1px rgba(255, 255, 255, 0.14);
-}
-
-.control-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-}
-
-.glossy-button {
-  position: relative;
-  min-height: 38px;
-  padding: 7px 4px;
-  border: 1px solid rgba(255, 255, 255, 0.13);
-  border-radius: 12px;
-  color: white;
-  font-size: 9px;
-  font-weight: 900;
-  letter-spacing: 0.3px;
-  background:
-    linear-gradient(145deg, #31435d, #111a29);
-  box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.15),
-    inset 0 -2px rgba(0, 0, 0, 0.45),
-    0 6px 10px rgba(0, 0, 0, 0.34);
-}
-
-.glossy-button::before {
-  content: "";
-  position: absolute;
-  left: 10%;
-  right: 10%;
-  top: 3px;
-  height: 34%;
-  border-radius: 8px;
-  background:
-    linear-gradient(
-      180deg,
-      rgba(255, 255, 255, 0.16),
-      transparent
-    );
-  pointer-events: none;
-}
-
-.glossy-button:active,
-.glossy-button.pressed {
-  transform: translateY(2px);
-  box-shadow:
-    inset 0 3px 6px rgba(0, 0, 0, 0.45);
-}
-
-.glossy-button.active {
-  background:
-    linear-gradient(145deg, #28c9ff, #05649f);
-  box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.35),
-    0 0 13px rgba(60, 188, 255, 0.45);
-}
-
-.glossy-button.warning-active {
-  background:
-    linear-gradient(145deg, #ffca4f, #a76500);
-  color: #171000;
-}
-
-.stop-button {
-  background:
-    linear-gradient(145deg, #ff5b68, #8d1019);
-  min-height: 36px;
-}
-
-.arm-grid {
-  height: calc(100% - 35px);
-  display: grid;
-  grid-template-columns: 1fr;
-  grid-template-rows: repeat(6, minmax(0, 1fr));
-  gap: 4px;
-  padding: 2px 11px 10px;
-}
-
-.servo-control {
-  min-height: 0;
-  display: grid;
-  grid-template-columns: 58px 1fr 44px;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 8px;
-  border-radius: 14px;
-
-  background:
-    linear-gradient(145deg, var(--inner-top), var(--inner-bottom));
-
-  border: 1px solid rgba(255, 255, 255, 0.07);
-
-  box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.07),
-    inset 0 -1px rgba(0, 0, 0, 0.65),
-    0 5px 9px rgba(0, 0, 0, 0.2);
-}
-
-.servo-name {
-  font-size: 13px;
-  font-weight: 900;
-}
-
-.servo-name small {
-  display: block;
-  margin-top: 1px;
-  color: var(--muted);
-  font-size: 7px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.servo-angle {
-  text-align: right;
-  font-size: 12px;
-  font-weight: 900;
-}
-
-input[type="range"] {
-  width: 100%;
-  height: 34px;
-  margin: 0;
-  appearance: none;
-  -webkit-appearance: none;
-  background: transparent;
-  touch-action: none;
-}
-
-input[type="range"]::-webkit-slider-runnable-track {
-  height: 8px;
-  border-radius: 10px;
-
-  background:
-    linear-gradient(
-      90deg,
-      var(--blue) var(--fill, 0%),
-      var(--track) var(--fill, 0%)
-    );
-
-  box-shadow:
-    inset 0 2px 4px rgba(0, 0, 0, 0.58),
-    0 1px rgba(255, 255, 255, 0.08);
-}
-
-input[type="range"].reverse-slider {
-  direction: rtl;
-}
-
-input[type="range"]::-webkit-slider-thumb {
-  width: 24px;
-  height: 24px;
-  margin-top: -8px;
-  border-radius: 50%;
-  appearance: none;
-  -webkit-appearance: none;
-
-  background:
-    radial-gradient(
-      circle at 34% 25%,
-      white,
-      #d9e8f5 34%,
-      #8fa8bd 72%,
-      #596e81
-    );
-
-  border: 2px solid var(--blue);
-
-  box-shadow:
-    inset 2px 2px 3px rgba(255, 255, 255, 0.8),
-    inset -3px -3px 4px rgba(0, 0, 0, 0.22),
-    0 5px 8px rgba(0, 0, 0, 0.52),
-    0 0 8px rgba(60, 188, 255, 0.38);
-}
-
-@media (orientation: landscape) {
-  .app {
-    max-width: none;
-    grid-template-columns: 44% 56%;
-    grid-template-rows: 100%;
-  }
-
-  .joystick {
-    width: min(29vw, 255px);
-    height: min(29vw, 255px);
-  }
-}
-
-</style>
-
-</head>
-
-<body>
-
-<main class="app">
-
-  <section class="panel">
-
-    <div class="panel-title">
-      <span class="status-dot"></span>
-      UGV Control
-    </div>
-
-    <div class="drive-layout">
-
-      <div class="joystick-container">
-
-        <div id="joystick" class="joystick">
-          <div id="stick" class="stick"></div>
-        </div>
-
-      </div>
-
-      <div class="drive-side">
-
-        <div class="control-row">
-
-          <div class="mini-card">
-            <div class="mini-label">Steer</div>
-            <div id="xDisplay" class="mini-value">0</div>
-          </div>
-
-          <div class="mini-card">
-            <div class="mini-label">Drive</div>
-            <div id="yDisplay" class="mini-value">0</div>
-          </div>
-
-        </div>
-
-        <div id="tiltCard" class="mini-card tilt-card">
-
-          <div class="mini-label">Roll / Pitch</div>
-
-          <div class="mini-value">
-            <span id="rollDisplay">0.0</span>°
-            /
-            <span id="pitchDisplay">0.0</span>°
-          </div>
-
-          <div
-            id="tiltStatus"
-            class="mini-label"
-            style="margin-top:3px"
-          >
-            SAFE
-          </div>
-
-        </div>
-
-        <div class="control-row">
-
-          <button
-            id="gyroButton"
-            class="glossy-button active"
-            onclick="toggleGyro()"
-          >
-            TILT ON
-          </button>
-
-          <button
-            id="lightButton"
-            class="glossy-button"
-            onclick="toggleLight()"
-          >
-            LIGHT OFF
-          </button>
-
-        </div>
-
-        <div class="control-row">
-
-          <button
-            id="buzzerButton"
-            class="glossy-button warning-active"
-          >
-            HOLD HORN
-          </button>
-
-          <button
-            class="glossy-button stop-button"
-            onclick="emergencyStop()"
-          >
-            STOP
-          </button>
-
-        </div>
-
-      </div>
-
-    </div>
-
-  </section>
-
-  <section class="panel">
-
-    <div class="panel-title">
-      Six-Axis Robotic Arm
-    </div>
-
-    <div class="arm-grid">
-
-      <div class="servo-control">
-        <div class="servo-name">
-          A
-          <small>Gripper</small>
-        </div>
-
-        <input
-          type="range"
-          min="0"
-          max="180"
-          value="0"
-          data-servo="A"
-        >
-
-        <div id="valueA" class="servo-angle">0°</div>
-      </div>
-
-      <div class="servo-control">
-        <div class="servo-name">
-          B
-          <small>Roll</small>
-        </div>
-
-        <input
-          type="range"
-          min="0"
-          max="180"
-          value="0"
-          data-servo="B"
-        >
-
-        <div id="valueB" class="servo-angle">0°</div>
-      </div>
-
-      <div class="servo-control">
-        <div class="servo-name">
-          C
-          <small>Pitch</small>
-        </div>
-
-        <input
-          type="range"
-          min="0"
-          max="180"
-          value="8"
-          data-servo="C"
-        >
-
-        <div id="valueC" class="servo-angle">8°</div>
-      </div>
-
-      <div class="servo-control">
-        <div class="servo-name">
-          D
-          <small>Elbow</small>
-        </div>
-
-        <input
-          type="range"
-          min="0"
-          max="180"
-          value="8"
-          data-servo="D"
-        >
-
-        <div id="valueD" class="servo-angle">8°</div>
-      </div>
-
-      <div class="servo-control">
-        <div class="servo-name">
-          E
-          <small>Shoulder</small>
-        </div>
-
-        <input
-          type="range"
-          min="0"
-          max="180"
-          value="67"
-          data-servo="E"
-        >
-
-        <div id="valueE" class="servo-angle">67°</div>
-      </div>
-
-      <div class="servo-control">
-        <div class="servo-name">
-          F
-          <small>Base</small>
-        </div>
-
-        <input
-          type="range"
-          min="0"
-          max="180"
-          value="105"
-          data-servo="F"
-          class="reverse-slider"
-        >
-
-        <div id="valueF" class="servo-angle">105°</div>
-      </div>
-
-    </div>
-
-  </section>
-
-</main>
-
-<script>
-
-const joystick = document.getElementById("joystick");
-const stick = document.getElementById("stick");
-
-const xDisplay = document.getElementById("xDisplay");
-const yDisplay = document.getElementById("yDisplay");
-
-let joystickActive = false;
-let activePointerID = null;
-
-let joystickX = 0;
-let joystickY = 0;
-
-let lastDriveSend = 0;
-const driveSendInterval = 45;
-
-function sendDrive(x, y, force = false) {
-
-  const now = Date.now();
-
-  if (
-    !force &&
-    now - lastDriveSend < driveSendInterval
-  ) {
-    return;
-  }
-
-  lastDriveSend = now;
-
-  fetch(
-    `/drive?x=${x}&y=${y}`,
-    {
-      cache: "no-store"
-    }
-  ).catch(() => {});
-}
-
-function moveJoystick(clientX, clientY) {
-
-  const rect = joystick.getBoundingClientRect();
-
-  const centreX = rect.left + rect.width / 2;
-  const centreY = rect.top + rect.height / 2;
-
-  const maximumRadius = rect.width * 0.32;
-
-  let dx = clientX - centreX;
-  let dy = clientY - centreY;
-
-  const distance = Math.sqrt(dx * dx + dy * dy);
-
-  if (distance > maximumRadius) {
-    dx = dx * maximumRadius / distance;
-    dy = dy * maximumRadius / distance;
-  }
-
-  stick.style.transform =
-    `translate(${dx}px, ${dy}px)`;
-
-  joystickX = Math.round(dx / maximumRadius * 100);
-  joystickY = Math.round(-dy / maximumRadius * 100);
-
-  if (Math.abs(joystickX) < 5) joystickX = 0;
-  if (Math.abs(joystickY) < 5) joystickY = 0;
-
-  xDisplay.textContent = joystickX;
-  yDisplay.textContent = joystickY;
-
-  sendDrive(joystickX, joystickY);
-}
-
-function resetJoystick() {
-
-  joystickActive = false;
-  activePointerID = null;
-
-  joystickX = 0;
-  joystickY = 0;
-
-  stick.style.transform = "translate(0px, 0px)";
-
-  xDisplay.textContent = "0";
-  yDisplay.textContent = "0";
-
-  sendDrive(0, 0, true);
-}
-
-joystick.addEventListener("pointerdown", event => {
-
-  event.preventDefault();
-
-  joystickActive = true;
-  activePointerID = event.pointerId;
-
-  joystick.setPointerCapture(event.pointerId);
-
-  moveJoystick(event.clientX, event.clientY);
-});
-
-joystick.addEventListener("pointermove", event => {
-
-  if (
-    !joystickActive ||
-    event.pointerId !== activePointerID
-  ) {
-    return;
-  }
-
-  event.preventDefault();
-
-  moveJoystick(event.clientX, event.clientY);
-});
-
-joystick.addEventListener("pointerup", event => {
-
-  if (event.pointerId === activePointerID) {
-    resetJoystick();
-  }
-});
-
-joystick.addEventListener(
-  "pointercancel",
-  resetJoystick
-);
-
-joystick.addEventListener(
-  "lostpointercapture",
-  resetJoystick
-);
-
-setInterval(() => {
-
-  if (joystickActive) {
-    sendDrive(joystickX, joystickY, true);
-  }
-
-}, 180);
-
-function emergencyStop() {
-
-  resetJoystick();
-
-  fetch(
-    "/stop",
-    {
-      cache: "no-store"
-    }
-  ).catch(() => {});
-}
-
-let gyroEnabled = true;
-
-function toggleGyro() {
-
-  gyroEnabled = !gyroEnabled;
-
-  fetch(
-    `/tilt-enable?state=${gyroEnabled ? 1 : 0}`,
-    {
-      cache: "no-store"
-    }
-  ).catch(() => {});
-
-  updateGyroButton();
-}
-
-function updateGyroButton() {
-
-  const button =
-    document.getElementById("gyroButton");
-
-  button.textContent =
-    gyroEnabled
-      ? "TILT ON"
-      : "TILT OFF";
-
-  button.classList.toggle(
-    "active",
-    gyroEnabled
-  );
-}
-
-let headlightEnabled = false;
-
-function toggleLight() {
-
-  headlightEnabled = !headlightEnabled;
-
-  fetch(
-    `/light?state=${headlightEnabled ? 1 : 0}`,
-    {
-      cache: "no-store"
-    }
-  ).catch(() => {});
-
-  updateLightButton();
-}
-
-function updateLightButton() {
-
-  const button =
-    document.getElementById("lightButton");
-
-  button.textContent =
-    headlightEnabled
-      ? "LIGHT ON"
-      : "LIGHT OFF";
-
-  button.classList.toggle(
-    "active",
-    headlightEnabled
-  );
-}
-
-const buzzerButton =
-  document.getElementById("buzzerButton");
-
-let buzzerHeld = false;
-let buzzerRefreshTimer = null;
-
-function buzzerStart(event) {
-
-  if (event) {
-    event.preventDefault();
-  }
-
-  if (buzzerHeld) {
-    return;
-  }
-
-  buzzerHeld = true;
-
-  buzzerButton.classList.add("pressed");
-
-  fetch(
-    "/buzzer?state=1",
-    {
-      cache: "no-store"
-    }
-  ).catch(() => {});
-
-  buzzerRefreshTimer =
-    setInterval(() => {
-
-      fetch(
-        "/buzzer?state=1",
-        {
-          cache: "no-store"
-        }
-      ).catch(() => {});
-
-    }, 300);
-}
-
-function buzzerStop(event) {
-
-  if (event) {
-    event.preventDefault();
-  }
-
-  buzzerHeld = false;
-
-  buzzerButton.classList.remove("pressed");
-
-  clearInterval(buzzerRefreshTimer);
-  buzzerRefreshTimer = null;
-
-  fetch(
-    "/buzzer?state=0",
-    {
-      cache: "no-store"
-    }
-  ).catch(() => {});
-}
-
-buzzerButton.addEventListener(
-  "pointerdown",
-  buzzerStart
-);
-
-buzzerButton.addEventListener(
-  "pointerup",
-  buzzerStop
-);
-
-buzzerButton.addEventListener(
-  "pointercancel",
-  buzzerStop
-);
-
-buzzerButton.addEventListener(
-  "pointerleave",
-  event => {
-
-    if (buzzerHeld) {
-      buzzerStop(event);
-    }
-  }
-);
-
-const servoTimers = {};
-
-document
-  .querySelectorAll('input[type="range"]')
-  .forEach(slider => {
-
-    updateSliderFill(slider);
-
-    slider.addEventListener("input", () => {
-
-      const servo = slider.dataset.servo;
-      const angle = Number(slider.value);
-
-      document.getElementById(
-        `value${servo}`
-      ).textContent = `${angle}°`;
-
-      updateSliderFill(slider);
-
-      clearTimeout(servoTimers[servo]);
-
-      servoTimers[servo] =
-        setTimeout(() => {
-
-          sendServo(servo, angle);
-
-        }, 25);
-    });
-
-    slider.addEventListener("change", () => {
-
-      sendServo(
-        slider.dataset.servo,
-        Number(slider.value)
-      );
-    });
-  });
-
-function sendServo(servo, angle) {
-
-  fetch(
-    `/servo?id=${servo}&angle=${angle}`,
-    {
-      cache: "no-store"
-    }
-  ).catch(() => {});
-}
-
-function updateSliderFill(slider) {
-
-  const min = Number(slider.min);
-  const max = Number(slider.max);
-  const value = Number(slider.value);
-
-  const percentage =
-    (value - min) / (max - min) * 100;
-
-  slider.style.setProperty(
-    "--fill",
-    `${percentage}%`
-  );
-}
-
-function requestStatus() {
-
-  fetch(
-    "/status",
-    {
-      cache: "no-store"
-    }
-  )
-  .then(response => response.json())
-  .then(data => {
-
-    document.getElementById(
-      "rollDisplay"
-    ).textContent = Number(data.roll).toFixed(1);
-
-    document.getElementById(
-      "pitchDisplay"
-    ).textContent = Number(data.pitch).toFixed(1);
-
-    gyroEnabled = Boolean(data.tiltEnabled);
-    headlightEnabled = Boolean(data.light);
-
-    updateGyroButton();
-    updateLightButton();
-
-    const tiltCard =
-      document.getElementById("tiltCard");
-
-    const tiltStatus =
-      document.getElementById("tiltStatus");
-
-    tiltCard.classList.toggle(
-      "danger",
-      Boolean(data.danger)
-    );
-
-    if (!data.mpu) {
-      tiltStatus.textContent = "MPU NOT FOUND";
-    }
-    else if (!gyroEnabled) {
-      tiltStatus.textContent = "PROTECTION OFF";
-    }
-    else if (data.danger) {
-      tiltStatus.textContent = "MOTORS LOCKED";
-    }
-    else {
-      tiltStatus.textContent = "SAFE";
-    }
-  })
-  .catch(() => {});
-}
-
-setInterval(requestStatus, 150);
-requestStatus();
-
-document.addEventListener(
-  "visibilitychange",
-  () => {
-
-    if (document.hidden) {
-      emergencyStop();
-      buzzerStop();
-    }
-  }
-);
-
-window.addEventListener(
-  "pagehide",
-  () => {
-
-    navigator.sendBeacon("/stop");
-    navigator.sendBeacon("/buzzer?state=0");
-  }
-);
-
-</script>
-
-</body>
-</html>
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,minimum-scale=1,user-scalable=no,viewport-fit=cover"><title>Mobile Robotic Manipulator</title><style>
+:root{--sky:#39bfff;--sky2:#0f8ed7;--ink:#17324a;--muted:#71869a;--line:#d7e5ef;--glass:rgba(255,255,255,.76)}*{box-sizing:border-box;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;touch-action:manipulation}html,body{width:100%;height:100%;margin:0;overflow:hidden;overscroll-behavior:none;font-family:Montserrat,Arial,sans-serif;color:var(--ink);background:radial-gradient(circle at 15% 0,#fff 0,#eefaff 40%,#dff2fb 100%)}body{padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}.app{height:100dvh;width:100%;max-width:900px;margin:auto;padding:8px;display:grid;grid-template-rows:46% 54%;gap:8px}.panel{min-height:0;border-radius:24px;border:1px solid rgba(255,255,255,.95);background:linear-gradient(145deg,rgba(255,255,255,.96),rgba(224,244,253,.84));box-shadow:0 14px 32px rgba(75,132,163,.22),inset 0 1px 0 #fff;overflow:hidden}.title{height:34px;display:flex;align-items:center;justify-content:center;gap:8px;font-size:12px;font-weight:900;letter-spacing:1.2px;text-transform:uppercase}.dot{width:8px;height:8px;border-radius:50%;background:#35d58c;box-shadow:0 0 10px #35d58c}.drive{height:calc(100% - 34px);display:grid;grid-template-columns:minmax(0,1fr) 145px;gap:10px;padding:2px 12px 10px}.joy-zone{min-height:0;display:grid;place-items:center}.joy{position:relative;width:min(49vw,225px);height:min(49vw,225px);max-height:100%;aspect-ratio:1;border-radius:50%;touch-action:none;background:radial-gradient(circle at 42% 34%,#fff 0,#f7fdff 28%,#d9edf7 60%,#bdd7e4 100%);border:12px solid rgba(255,255,255,.9);box-shadow:0 18px 30px rgba(65,119,150,.27),inset 0 0 0 3px #d5e7f0,inset 14px 16px 22px rgba(255,255,255,.9),inset -16px -18px 24px rgba(94,139,164,.22)}.joy:before,.joy:after{content:"";position:absolute;left:14%;right:14%;top:50%;height:7px;border-radius:9px;background:#c7d4dc;box-shadow:inset 0 2px 3px rgba(70,100,120,.2)}.joy:after{top:14%;bottom:14%;left:50%;width:7px;height:auto}.stick{position:absolute;z-index:2;left:31%;top:31%;width:38%;height:38%;border-radius:50%;pointer-events:none;background:radial-gradient(circle at 29% 20%,#fff 0,#b8ecff 13%,#55caff 35%,#159ee8 67%,#0872b8 100%);border:2px solid rgba(255,255,255,.8);box-shadow:0 15px 22px rgba(26,121,179,.38),0 0 18px rgba(57,191,255,.32),inset 8px 9px 10px rgba(255,255,255,.38),inset -9px -11px 12px rgba(0,72,130,.26)}.side{display:flex;flex-direction:column;justify-content:center;gap:6px}.card,.control{border-radius:15px;background:linear-gradient(145deg,#fff,#e7f5fb);border:1px solid #fff;box-shadow:0 7px 13px rgba(66,121,151,.16),inset 0 1px 0 #fff;padding:7px}.minirow{display:grid;grid-template-columns:1fr 1fr;gap:6px}.label{font-size:7px;color:var(--muted);font-weight:800;letter-spacing:.7px;text-transform:uppercase}.value{font-size:14px;font-weight:900;margin-top:2px}.button{min-height:36px;border:1px solid rgba(255,255,255,.95);border-radius:12px;color:#fff;font-size:9px;font-weight:900;background:linear-gradient(145deg,#78d9ff,#119ee7);box-shadow:0 7px 12px rgba(25,144,205,.25),inset 0 2px 2px rgba(255,255,255,.55),inset 0 -3px 4px rgba(0,77,137,.2)}.button:active,.button.pressed{transform:translateY(2px)}.button.off{background:linear-gradient(145deg,#eaf4f8,#c8dbe4);color:#526b7b}.button.stop{background:linear-gradient(145deg,#ff8c96,#e6384a)}.twobtn{display:grid;grid-template-columns:1fr 1fr;gap:6px}.rangebox{padding:7px 9px}.rangehead{display:flex;justify-content:space-between;align-items:center;font-size:9px;font-weight:900;margin-bottom:2px}.arm{height:calc(100% - 34px);display:grid;grid-template-rows:repeat(6,minmax(0,1fr));gap:5px;padding:2px 10px 10px}.servo{min-height:0;display:grid;grid-template-columns:70px 1fr 42px;align-items:center;gap:8px;padding:3px 10px;border-radius:14px;background:linear-gradient(145deg,#fff,#e8f6fc);border:1px solid #fff;box-shadow:0 5px 10px rgba(67,123,153,.14),inset 0 1px 0 #fff}.name{font-size:12px;font-weight:900}.name small{display:block;color:var(--muted);font-size:7px;margin-top:1px}.angle{text-align:right;font-size:12px;font-weight:900}input[type=range]{width:100%;height:30px;margin:0;appearance:none;-webkit-appearance:none;background:transparent;touch-action:none}input[type=range]::-webkit-slider-runnable-track{height:8px;border-radius:8px;background:linear-gradient(180deg,#d5e3eb,#eef7fa);box-shadow:inset 0 2px 4px rgba(61,94,114,.22)}input[type=range]::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;width:23px;height:23px;margin-top:-8px;border-radius:50%;background:radial-gradient(circle at 30% 24%,#fff,#bcecff 27%,#38bfff 64%,#0c85cb);border:2px solid #fff;box-shadow:0 5px 9px rgba(16,121,181,.28),inset 2px 2px 3px rgba(255,255,255,.7)}.tilt.danger{background:#ffe4e7}.trim input[type=range]::-webkit-slider-thumb{width:18px;height:18px;margin-top:-5px}@media(orientation:landscape){.app{max-width:none;grid-template-columns:43% 57%;grid-template-rows:100%;gap:8px}.drive{grid-template-columns:minmax(0,1fr) 138px;padding:2px 9px 9px}.joy{width:min(28vw,245px);height:min(28vw,245px)}.arm{gap:5px}.servo{grid-template-columns:76px 1fr 42px}}@media(max-height:540px) and (orientation:landscape){.title{height:28px}.drive,.arm{height:calc(100% - 28px)}.button{min-height:30px}.card,.control{padding:5px}.rangebox{padding:4px 7px}.servo{padding:2px 8px}.joy{width:min(27vw,205px);height:min(27vw,205px)}}
+</style></head><body><main class="app"><section class="panel"><div class="title"><span class="dot"></span>UGV Control</div><div class="drive"><div class="joy-zone"><div id="joy" class="joy"><div id="stick" class="stick"></div></div></div><div class="side"><div class="minirow"><div class="card"><div class="label">Steer</div><div id="xd" class="value">0</div></div><div class="card"><div class="label">Drive</div><div id="yd" class="value">0</div></div></div><div class="control rangebox"><div class="rangehead"><span>Speed</span><span id="speedValue">55%</span></div><input id="speed" type="range" min="15" max="100" value="55"></div><div class="control rangebox trim"><div class="rangehead"><span>Trim L/R</span><span id="trimValue">0</span></div><input id="trim" type="range" min="-25" max="25" value="0"></div><div id="tiltCard" class="card tilt"><div class="label">Roll / Pitch</div><div class="value"><span id="roll">0.0</span>° / <span id="pitch">0.0</span>°</div><div id="tiltStatus" class="label">SAFE</div></div><div class="twobtn"><button id="gyroButton" class="button" onclick="toggleGyro()">TILT ON</button><button id="lightButton" class="button off" onclick="toggleLight()">LIGHT OFF</button></div><div class="twobtn"><button id="buzzerButton" class="button">HOLD HORN</button><button class="button stop" onclick="emergencyStop()">STOP</button></div></div></div></section><section class="panel"><div class="title">Six-Axis Robotic Arm</div><div class="arm">
+<div class="servo"><div class="name">A<small>Gripper</small></div><input type="range" min="0" max="180" value="0" data-servo="A"><div id="valueA" class="angle">0°</div></div>
+<div class="servo"><div class="name">B<small>Roll</small></div><input type="range" min="0" max="180" value="0" data-servo="B"><div id="valueB" class="angle">0°</div></div>
+<div class="servo"><div class="name">C<small>Pitch</small></div><input type="range" min="0" max="180" value="8" data-servo="C"><div id="valueC" class="angle">8°</div></div>
+<div class="servo"><div class="name">D<small>Elbow</small></div><input type="range" min="0" max="180" value="8" data-servo="D"><div id="valueD" class="angle">8°</div></div>
+<div class="servo"><div class="name">E<small>Shoulder</small></div><input type="range" min="0" max="180" value="67" data-servo="E"><div id="valueE" class="angle">67°</div></div>
+<div class="servo"><div class="name">F<small>Base</small></div><input type="range" min="0" max="180" value="105" data-servo="F"><div id="valueF" class="angle">105°</div></div>
+</div></section></main><script>
+const joy=document.getElementById('joy'),stick=document.getElementById('stick'),xd=document.getElementById('xd'),yd=document.getElementById('yd'),speed=document.getElementById('speed'),trim=document.getElementById('trim');let active=false,pid=null,x=0,y=0,lastSend=0;const interval=40;speed.oninput=()=>speedValue.textContent=speed.value+'%';trim.oninput=()=>trimValue.textContent=trim.value;function sendDrive(force=false){let n=Date.now();if(!force&&n-lastSend<interval)return;lastSend=n;fetch(`/drive?x=${x}&y=${y}&speed=${speed.value}&trim=${trim.value}`,{cache:'no-store'}).catch(()=>{})}function move(cx,cy){let r=joy.getBoundingClientRect(),mx=r.left+r.width/2,my=r.top+r.height/2,rad=r.width*.31,dx=cx-mx,dy=cy-my,d=Math.hypot(dx,dy);if(d>rad){dx*=rad/d;dy*=rad/d}stick.style.transform=`translate(${dx}px,${dy}px)`;x=Math.round(dx/rad*100);y=Math.round(-dy/rad*100);if(Math.abs(x)<5)x=0;if(Math.abs(y)<5)y=0;xd.textContent=x;yd.textContent=y;sendDrive()}function reset(){active=false;pid=null;x=0;y=0;stick.style.transform='translate(0,0)';xd.textContent='0';yd.textContent='0';sendDrive(true)}joy.onpointerdown=e=>{e.preventDefault();active=true;pid=e.pointerId;joy.setPointerCapture(pid);move(e.clientX,e.clientY)};joy.onpointermove=e=>{if(active&&e.pointerId===pid){e.preventDefault();move(e.clientX,e.clientY)}};joy.onpointerup=e=>{if(e.pointerId===pid)reset()};joy.onpointercancel=reset;joy.onlostpointercapture=reset;setInterval(()=>{if(active)sendDrive(true)},160);function emergencyStop(){reset();fetch('/stop',{cache:'no-store'}).catch(()=>{})}let gyroEnabled=true,headlightEnabled=false;function toggleGyro(){gyroEnabled=!gyroEnabled;fetch(`/tilt-enable?state=${gyroEnabled?1:0}`,{cache:'no-store'}).catch(()=>{});updateButtons()}function toggleLight(){headlightEnabled=!headlightEnabled;fetch(`/light?state=${headlightEnabled?1:0}`,{cache:'no-store'}).catch(()=>{});updateButtons()}function updateButtons(){gyroButton.textContent=gyroEnabled?'TILT ON':'TILT OFF';gyroButton.classList.toggle('off',!gyroEnabled);lightButton.textContent=headlightEnabled?'LIGHT ON':'LIGHT OFF';lightButton.classList.toggle('off',!headlightEnabled)}const horn=document.getElementById('buzzerButton');let held=false,ht=null;function hornOn(e){e&&e.preventDefault();if(held)return;held=true;horn.classList.add('pressed');fetch('/buzzer?state=1').catch(()=>{});ht=setInterval(()=>fetch('/buzzer?state=1').catch(()=>{}),300)}function hornOff(e){e&&e.preventDefault();held=false;horn.classList.remove('pressed');clearInterval(ht);fetch('/buzzer?state=0').catch(()=>{})}horn.onpointerdown=hornOn;horn.onpointerup=hornOff;horn.onpointercancel=hornOff;horn.onpointerleave=e=>{if(held)hornOff(e)};document.querySelectorAll('.servo input').forEach(sl=>{let t;sl.oninput=()=>{let id=sl.dataset.servo,a=Number(sl.value);document.getElementById('value'+id).textContent=a+'°';clearTimeout(t);t=setTimeout(()=>fetch(`/servo?id=${id}&angle=${a}`,{cache:'no-store'}).catch(()=>{}),18)};sl.onchange=()=>fetch(`/servo?id=${sl.dataset.servo}&angle=${sl.value}`,{cache:'no-store'}).catch(()=>{})});function status(){fetch('/status',{cache:'no-store'}).then(r=>r.json()).then(d=>{roll.textContent=Number(d.roll).toFixed(1);pitch.textContent=Number(d.pitch).toFixed(1);gyroEnabled=!!d.tiltEnabled;headlightEnabled=!!d.light;updateButtons();tiltCard.classList.toggle('danger',!!d.danger);tiltStatus.textContent=!d.mpu?'MPU NOT FOUND':!gyroEnabled?'PROTECTION OFF':d.danger?'MOTORS LOCKED':'SAFE'}).catch(()=>{})}setInterval(status,180);status();document.addEventListener('visibilitychange',()=>{if(document.hidden){emergencyStop();hornOff()}});window.addEventListener('pagehide',()=>{navigator.sendBeacon('/stop');navigator.sendBeacon('/buzzer?state=0')});let lastTouch=0;document.addEventListener('touchend',e=>{let n=Date.now();if(n-lastTouch<320)e.preventDefault();lastTouch=n},{passive:false});document.addEventListener('gesturestart',e=>e.preventDefault());
+</script></body></html>
 )rawliteral";
 
 void writeLogicOutput(
@@ -1290,47 +199,41 @@ void writeMotorSide(
   }
 }
 
-void driveMotors(
-  int leftCommand,
-  int rightCommand
-) {
-  if (
-    tiltProtectionEnabled &&
-    dangerousTilt
-  ) {
-    leftCommand = 0;
-    rightCommand = 0;
-  }
-
-  writeMotorSide(
-    leftCommand,
-    LEFT_RPWM_CHANNEL,
-    LEFT_LPWM_CHANNEL,
-    REVERSE_LEFT_SIDE
-  );
-
-  writeMotorSide(
-    rightCommand,
-    RIGHT_RPWM_CHANNEL,
-    RIGHT_LPWM_CHANNEL,
-    REVERSE_RIGHT_SIDE
-  );
+void outputMotors(int leftCommand,int rightCommand){
+  if(tiltProtectionEnabled&&dangerousTilt){leftCommand=0;rightCommand=0;}
+  writeMotorSide(leftCommand,LEFT_RPWM_CHANNEL,LEFT_LPWM_CHANNEL,REVERSE_LEFT_SIDE);
+  writeMotorSide(rightCommand,RIGHT_RPWM_CHANNEL,RIGHT_LPWM_CHANNEL,REVERSE_RIGHT_SIDE);
 }
 
-void stopMotors() {
-  writeMotorSide(
-    0,
-    LEFT_RPWM_CHANNEL,
-    LEFT_LPWM_CHANNEL,
-    REVERSE_LEFT_SIDE
-  );
+void driveMotors(int leftCommand,int rightCommand){
+  targetLeftMotor=constrain(leftCommand,-MOTOR_SPEED_LIMIT,MOTOR_SPEED_LIMIT);
+  targetRightMotor=constrain(rightCommand,-MOTOR_SPEED_LIMIT,MOTOR_SPEED_LIMIT);
+}
 
-  writeMotorSide(
-    0,
-    RIGHT_RPWM_CHANNEL,
-    RIGHT_LPWM_CHANNEL,
-    REVERSE_RIGHT_SIDE
-  );
+void stopMotors(){
+  targetLeftMotor=0;
+  targetRightMotor=0;
+}
+
+void hardStopMotors(){
+  targetLeftMotor=targetRightMotor=currentLeftMotor=currentRightMotor=0;
+  outputMotors(0,0);
+}
+
+int rampValue(int currentValue,int targetValue,int step){
+  if(currentValue<targetValue)return min(currentValue+step,targetValue);
+  if(currentValue>targetValue)return max(currentValue-step,targetValue);
+  return currentValue;
+}
+
+void updateMotorRamp(){
+  unsigned long now=millis();
+  if(now-lastMotorRampTime<MOTOR_RAMP_INTERVAL_MS)return;
+  lastMotorRampTime=now;
+  if(tiltProtectionEnabled&&dangerousTilt){targetLeftMotor=0;targetRightMotor=0;}
+  currentLeftMotor=rampValue(currentLeftMotor,targetLeftMotor,MOTOR_RAMP_STEP);
+  currentRightMotor=rampValue(currentRightMotor,targetRightMotor,MOTOR_RAMP_STEP);
+  outputMotors(currentLeftMotor,currentRightMotor);
 }
 
 int applyJoystickDeadZone(int value) {
@@ -1393,56 +296,41 @@ void writePCA9685Servo(
   );
 }
 
-void setArmServo(
-  char servoID,
-  int angle
-) {
-  angle = constrain(angle, 0, 180);
-
-  switch (servoID) {
-
-    case 'A':
-      armAngleA = angle;
-      writeDirectServo(SERVO_A_CHANNEL, angle);
-      break;
-
-    case 'B':
-      armAngleB = angle;
-      writeDirectServo(SERVO_B_CHANNEL, angle);
-      break;
-
-    case 'C':
-      armAngleC = angle;
-      writePCA9685Servo(
-        SERVO_C_CHANNEL,
-        angle
-      );
-      break;
-
-    case 'D':
-      armAngleD = angle;
-      writePCA9685Servo(
-        SERVO_D_CHANNEL,
-        angle
-      );
-      break;
-
-    case 'E':
-      armAngleE = angle;
-      writePCA9685Servo(
-        SERVO_E_CHANNEL,
-        angle
-      );
-      break;
-
-    case 'F':
-      armAngleF = angle;
-      writePCA9685Servo(
-        SERVO_F_CHANNEL,
-        angle
-      );
-      break;
+void writeArmNow(char servoID,int angle){
+  angle=constrain(angle,0,180);
+  switch(servoID){
+    case 'A': armAngleA=angle; writeDirectServo(SERVO_A_CHANNEL,angle); break;
+    case 'B': armAngleB=angle; writeDirectServo(SERVO_B_CHANNEL,angle); break;
+    case 'C': armAngleC=angle; writePCA9685Servo(SERVO_C_CHANNEL,angle); break;
+    case 'D': armAngleD=angle; writePCA9685Servo(SERVO_D_CHANNEL,angle); break;
+    case 'E': armAngleE=angle; writePCA9685Servo(SERVO_E_CHANNEL,angle); break;
+    case 'F': armAngleF=angle; writePCA9685Servo(SERVO_F_CHANNEL,180-angle); break;
   }
+}
+
+void setArmServo(char servoID,int angle){
+  angle=constrain(angle,0,180);
+  switch(servoID){
+    case 'A': targetArmA=angle; break;
+    case 'B': targetArmB=angle; break;
+    case 'C': targetArmC=angle; break;
+    case 'D': targetArmD=angle; break;
+    case 'E': targetArmE=angle; break;
+    case 'F': targetArmF=angle; break;
+  }
+}
+
+void updateServoRamp(){
+  unsigned long now=millis();
+  if(now-lastServoRampTime<SERVO_RAMP_INTERVAL_MS)return;
+  lastServoRampTime=now;
+  int a=rampValue(armAngleA,targetArmA,1),b=rampValue(armAngleB,targetArmB,1),c=rampValue(armAngleC,targetArmC,1),d=rampValue(armAngleD,targetArmD,1),e=rampValue(armAngleE,targetArmE,1),f=rampValue(armAngleF,targetArmF,1);
+  if(a!=armAngleA)writeArmNow('A',a);
+  if(b!=armAngleB)writeArmNow('B',b);
+  if(c!=armAngleC)writeArmNow('C',c);
+  if(d!=armAngleD)writeArmNow('D',d);
+  if(e!=armAngleE)writeArmNow('E',e);
+  if(f!=armAngleF)writeArmNow('F',f);
 }
 
 void calculateRawTilt(
@@ -1626,110 +514,28 @@ void handleMainPage() {
   );
 }
 
-void handleDrive() {
-  if (
-    !server.hasArg("x") ||
-    !server.hasArg("y")
-  ) {
-    stopMotors();
-
-    server.send(
-      400,
-      "text/plain",
-      "Missing joystick values"
-    );
-
-    return;
-  }
-
-  if (
-    tiltProtectionEnabled &&
-    dangerousTilt
-  ) {
-    stopMotors();
-
-    server.send(
-      423,
-      "text/plain",
-      "Drive locked by tilt protection"
-    );
-
-    return;
-  }
-
-  int steering = constrain(
-    server.arg("x").toInt(),
-    -100,
-    100
-  );
-
-  int throttle = constrain(
-    server.arg("y").toInt(),
-    -100,
-    100
-  );
-
-  steering =
-    applyJoystickDeadZone(steering);
-
-  throttle =
-    applyJoystickDeadZone(throttle);
-
-  int leftPercentage =
-    throttle + steering;
-
-  int rightPercentage =
-    throttle - steering;
-
-  int largestMagnitude = max(
-    abs(leftPercentage),
-    abs(rightPercentage)
-  );
-
-  if (largestMagnitude > 100) {
-
-    leftPercentage =
-      leftPercentage * 100 /
-      largestMagnitude;
-
-    rightPercentage =
-      rightPercentage * 100 /
-      largestMagnitude;
-  }
-
-  int leftPWM = 0;
-  int rightPWM = 0;
-
-  if (leftPercentage != 0) {
-    leftPWM =
-      percentageToPWM(leftPercentage);
-
-    if (leftPercentage < 0) {
-      leftPWM = -leftPWM;
-    }
-  }
-
-  if (rightPercentage != 0) {
-    rightPWM =
-      percentageToPWM(rightPercentage);
-
-    if (rightPercentage < 0) {
-      rightPWM = -rightPWM;
-    }
-  }
-
-  driveMotors(
-    leftPWM,
-    rightPWM
-  );
-
-  lastMotorCommandTime = millis();
-
-  server.send(
-    200,
-    "text/plain",
-    "OK"
-  );
+void handleDrive(){
+  if(!server.hasArg("x")||!server.hasArg("y")){stopMotors();server.send(400,"text/plain","Missing joystick values");return;}
+  if(tiltProtectionEnabled&&dangerousTilt){stopMotors();server.send(423,"text/plain","Drive locked by tilt protection");return;}
+  int steering=-constrain(server.arg("x").toInt(),-100,100);
+  int throttle=-constrain(server.arg("y").toInt(),-100,100);
+  int speedPercent=server.hasArg("speed")?constrain(server.arg("speed").toInt(),15,100):55;
+  int trimValue=server.hasArg("trim")?constrain(server.arg("trim").toInt(),-25,25):0;
+  steering=applyJoystickDeadZone(steering);
+  throttle=applyJoystickDeadZone(throttle);
+  int leftPercentage=throttle+steering;
+  int rightPercentage=throttle-steering;
+  int largestMagnitude=max(abs(leftPercentage),abs(rightPercentage));
+  if(largestMagnitude>100){leftPercentage=leftPercentage*100/largestMagnitude;rightPercentage=rightPercentage*100/largestMagnitude;}
+  leftPercentage=leftPercentage*speedPercent/100;
+  rightPercentage=rightPercentage*speedPercent/100;
+  if(trimValue>0)leftPercentage=leftPercentage*(100-trimValue)/100;
+  if(trimValue<0)rightPercentage=rightPercentage*(100+trimValue)/100;
+  int leftPWM=leftPercentage==0?0:percentageToPWM(leftPercentage)*(leftPercentage<0?-1:1);
+  int rightPWM=rightPercentage==0?0:percentageToPWM(rightPercentage)*(rightPercentage<0?-1:1);
+  driveMotors(leftPWM,rightPWM);
+  lastMotorCommandTime=millis();
+  server.send(200,"text/plain","OK");
 }
 
 void handleServo() {
@@ -1881,7 +687,7 @@ void handleBuzzer() {
 }
 
 void handleStop() {
-  stopMotors();
+  hardStopMotors();
   setBuzzer(false);
 
   server.send(
@@ -2019,7 +825,7 @@ void setup() {
     );
   }
 
-  stopMotors();
+  hardStopMotors();
 
   bool directServoA = ledcAttachChannel(
     SERVO_A_PIN,
@@ -2099,12 +905,12 @@ void setup() {
     );
   }
 
-  setArmServo('A', 0);
-  setArmServo('B', 0);
-  setArmServo('C', 8);
-  setArmServo('D', 8);
-  setArmServo('E', 67);
-  setArmServo('F', 105);
+  writeArmNow('A',0);
+  writeArmNow('B',0);
+  writeArmNow('C',8);
+  writeArmNow('D',8);
+  writeArmNow('E',67);
+  writeArmNow('F',105);
 
   Serial.println(
     "Servo positions: "
@@ -2205,6 +1011,8 @@ void loop() {
   server.handleClient();
 
   updateMPU6050();
+  updateMotorRamp();
+  updateServoRamp();
 
   unsigned long now = millis();
 
