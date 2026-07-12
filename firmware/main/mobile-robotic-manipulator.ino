@@ -60,6 +60,13 @@ bool headlightOn = false;
 
 const unsigned long BUZZER_TIMEOUT_MS = 700;
 unsigned long lastBuzzerRefreshTime = 0;
+int previousClientCount = 0;
+bool beepSequenceActive = false;
+uint8_t beepPulsesRemaining = 0;
+bool beepOutputState = false;
+unsigned long beepPhaseTime = 0;
+const unsigned long BEEP_ON_MS = 110;
+const unsigned long BEEP_OFF_MS = 120;
 
 const uint8_t SERVO_A_PIN = 32;
 const uint8_t SERVO_B_PIN = 33;
@@ -124,17 +131,18 @@ const unsigned long SERVO_RAMP_INTERVAL_MS = 28;
 unsigned long lastServoRampTime = 0;
 
 const char WEBPAGE[] PROGMEM = R"rawliteral(
-<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,minimum-scale=1,user-scalable=no,viewport-fit=cover"><title>Mobile Robotic Manipulator</title><style>
-:root{--ink:#17324a;--muted:#7890a2;--blue1:#8be4ff;--blue2:#27b7f5;--blue3:#087fc6}*{box-sizing:border-box;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}html,body{width:100%;height:100%;margin:0;overflow:hidden;overscroll-behavior:none;touch-action:none;font-family:Montserrat,Arial,sans-serif;color:var(--ink);background:linear-gradient(145deg,#fff,#eefaff 55%,#dff4fd)}body{padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}.app{width:100%;height:100dvh;max-width:760px;margin:auto;padding:6px;display:grid;grid-template-rows:47% 53%;gap:6px}.panel{min-height:0;overflow:hidden;border-radius:24px;background:linear-gradient(145deg,rgba(255,255,255,.98),rgba(231,248,255,.94));box-shadow:0 12px 28px rgba(72,132,161,.18),inset 7px 7px 16px rgba(255,255,255,.92),inset -8px -8px 18px rgba(116,173,202,.12)}.title{height:32px;display:flex;align-items:center;justify-content:center;gap:8px;font-size:12px;font-weight:900;letter-spacing:1.05px;text-transform:uppercase}.dot{width:8px;height:8px;border-radius:50%;background:#35d58c;box-shadow:0 0 10px #35d58c}.drive-area{height:calc(100% - 32px);display:grid;grid-template-columns:31% 69%;gap:7px;padding:4px 8px 8px}.left-controls{min-width:0;display:flex;flex-direction:column;align-items:stretch;justify-content:space-between;gap:6px;padding:2px 0}.btn{border:0;color:#fff;font-weight:900;letter-spacing:.45px;background:linear-gradient(145deg,var(--blue1),var(--blue2) 52%,var(--blue3));box-shadow:0 9px 16px rgba(23,139,199,.25),inset 0 3px 4px rgba(255,255,255,.72),inset 0 -5px 7px rgba(0,80,145,.2);text-shadow:0 1px rgba(0,64,110,.25)}.btn:active,.btn.pressed{transform:translateY(2px);box-shadow:0 4px 8px rgba(23,139,199,.2),inset 0 4px 7px rgba(0,76,130,.18)}.btn.big{height:50px;border-radius:18px;font-size:9px}.btn.small{height:39px;width:78%;align-self:center;border-radius:15px;font-size:8px}.btn.off{background:linear-gradient(145deg,#f9fdff,#d7e8f0 55%,#bfd5e0);color:#597180;text-shadow:none}.btn.stop{background:linear-gradient(145deg,#ff9ba5,#f15f70 52%,#dc3046)}.readouts{display:grid;grid-template-columns:1fr 1fr;gap:5px}.mini{padding:5px 2px;border-radius:13px;background:linear-gradient(145deg,#fff,#e7f4fa);box-shadow:0 5px 10px rgba(68,124,152,.12),inset 2px 2px 4px #fff,inset -3px -3px 5px rgba(111,164,191,.1);text-align:center}.mini span{display:block;font-size:6px;color:var(--muted);font-weight:900;letter-spacing:.6px}.mini b{font-size:12px}.right-controls{min-width:0;display:grid;grid-template-rows:32px minmax(0,1fr) 48px;gap:5px;align-items:center}.controlbox{width:92%;justify-self:center;padding:5px 11px;border-radius:17px;background:linear-gradient(145deg,#fff,#e8f6fb);box-shadow:0 7px 14px rgba(64,120,149,.14),inset 3px 3px 6px #fff,inset -4px -4px 8px rgba(104,159,188,.1)}.rhead{display:flex;justify-content:space-between;font-size:8px;font-weight:900;margin-bottom:1px}.speedbox .rhead{font-size:10px}.joywrap{min-height:0;display:flex;align-items:center;justify-content:center}.joy{position:relative;width:min(47vw,194px);height:min(47vw,194px);max-width:100%;max-height:100%;aspect-ratio:1;border-radius:50%;touch-action:none;background:radial-gradient(circle at 40% 28%,#fff 0,#f9fdff 25%,#e9f5fa 52%,#cadfe9 100%);box-shadow:0 18px 28px rgba(62,125,157,.24),inset 12px 14px 22px rgba(255,255,255,.96),inset -15px -17px 24px rgba(77,130,158,.2)}.joy:before,.joy:after{content:"";position:absolute;left:17%;right:17%;top:50%;height:7px;border-radius:10px;background:linear-gradient(#d5e2e8,#b9ccd5,#edf5f8);box-shadow:inset 0 2px 4px rgba(57,88,106,.18)}.joy:after{top:17%;bottom:17%;left:50%;width:7px;height:auto}.stick{position:absolute;z-index:2;left:31%;top:31%;width:38%;height:38%;border-radius:50%;pointer-events:none;background:radial-gradient(circle at 27% 17%,#fff 0,#d8f5ff 11%,#79dcff 30%,#26b6f5 58%,#0679bf 100%);box-shadow:0 16px 23px rgba(15,116,177,.36),0 0 0 4px rgba(255,255,255,.88),inset 8px 9px 11px rgba(255,255,255,.55),inset -10px -12px 13px rgba(0,70,128,.25)}input[type=range]{width:100%;height:24px;margin:0;appearance:none;-webkit-appearance:none;background:transparent;touch-action:none}input[type=range]::-webkit-slider-runnable-track{height:7px;border-radius:8px;background:linear-gradient(180deg,#c8d9e1,#edf5f8);box-shadow:inset 0 2px 4px rgba(61,94,114,.2)}input[type=range]::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;width:21px;height:21px;margin-top:-7px;border-radius:50%;background:radial-gradient(circle at 30% 22%,#fff,#caf1ff 28%,#42c4ff 62%,#0b84ca);box-shadow:0 6px 10px rgba(16,121,181,.28),0 0 0 3px rgba(255,255,255,.9),inset 2px 2px 4px rgba(255,255,255,.75)}.trimbox{width:72%;padding:3px 10px}.trimbox input[type=range]{height:15px}.trimbox input[type=range]::-webkit-slider-thumb{width:16px;height:16px;margin-top:-5px}.arm{height:calc(100% - 32px);display:grid;grid-template-rows:repeat(6,minmax(0,1fr));gap:4px;padding:3px 9px 9px}.servo{min-height:0;display:grid;grid-template-columns:58px 1fr 37px;align-items:center;gap:7px;padding:2px 9px;border-radius:15px;background:linear-gradient(145deg,#fff,#e9f7fc);box-shadow:0 4px 9px rgba(67,123,153,.11),inset 3px 3px 6px #fff,inset -4px -4px 7px rgba(111,164,191,.08)}.name{font-size:15px;font-weight:900}.name small{display:block;color:var(--muted);font-size:9px;margin-top:2px;font-weight:800}.angle{text-align:right;font-size:12px;font-weight:900}.danger{outline:2px solid #ff5969}@media(max-height:700px){.app{grid-template-rows:46% 54%}.title{height:29px}.drive-area,.arm{height:calc(100% - 29px)}.btn.big{height:43px}.btn.small{height:34px}.right-controls{grid-template-rows:30px minmax(0,1fr) 42px}.joy{width:min(43vw,174px);height:min(43vw,174px)}.servo{padding:1px 8px}}
-</style></head><body><main class="app"><section class="panel"><div class="title"><span class="dot"></span>Mobile Robotic Manipulator</div><div class="drive-area"><div class="left-controls"><button id="lightButton" class="btn big off" onclick="toggleLight()">LIGHT OFF</button><button id="buzzerButton" class="btn small">HOLD HORN</button><button id="gyroButton" class="btn small" onclick="toggleGyro()">TILT ON</button><button class="btn big stop" onclick="emergencyStop()">STOP</button><div class="readouts"><div class="mini"><span>STEER</span><b id="xd">0</b></div><div class="mini"><span>DRIVE</span><b id="yd">0</b></div></div></div><div class="right-controls"><div class="controlbox trimbox"><div class="rhead"><span>Trim L/R</span><span id="trimValue">0</span></div><input id="trim" type="range" min="-25" max="25" value="0"></div><div class="joywrap"><div id="joy" class="joy"><div id="stick" class="stick"></div></div></div><div class="controlbox speedbox"><div class="rhead"><span>Speed</span><span id="speedValue">55%</span></div><input id="speed" type="range" min="15" max="100" value="55"></div></div></div></section><section class="panel"><div class="title">Six-Axis Robotic Arm</div><div class="arm">
-<div class="servo"><div class="name">A<small>Gripper</small></div><input type="range" min="0" max="180" value="0" data-servo="A"><div id="valueA" class="angle">0°</div></div>
-<div class="servo"><div class="name">B<small>Roll</small></div><input type="range" min="0" max="180" value="0" data-servo="B"><div id="valueB" class="angle">0°</div></div>
-<div class="servo"><div class="name">C<small>Pitch</small></div><input type="range" min="0" max="180" value="94" data-servo="C"><div id="valueC" class="angle">94°</div></div>
-<div class="servo"><div class="name">D<small>Elbow</small></div><input type="range" min="0" max="180" value="16" data-servo="D"><div id="valueD" class="angle">16°</div></div>
-<div class="servo"><div class="name">E<small>Shoulder</small></div><input type="range" min="0" max="180" value="180" data-servo="E"><div id="valueE" class="angle">180°</div></div>
-<div class="servo"><div class="name">F<small>Base</small></div><input type="range" min="0" max="180" value="73" data-servo="F"><div id="valueF" class="angle">73°</div></div>
+<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,minimum-scale=1,user-scalable=no,viewport-fit=cover"><title>Mobile Robotic Manipulator</title><style>
+:root{--bg:#07111f;--panel:#0d1c30;--panel2:#12263f;--text:#f7fbff;--muted:#9ab0c7;--blue:#108dff;--blue2:#004fbd;--red:#ef304b;--green:#28da91}*{box-sizing:border-box;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none}html,body{width:100%;height:100%;margin:0;overflow:hidden;overscroll-behavior:none;touch-action:none;background:linear-gradient(145deg,#030914,#0a1830 55%,#06101e);font-family:Arial,Helvetica,sans-serif;color:var(--text)}body{padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}.app{width:100%;height:100dvh;max-width:760px;margin:auto;padding:6px;display:grid;grid-template-rows:47% 53%;gap:6px}.panel{min-height:0;overflow:hidden;border-radius:22px;background:linear-gradient(150deg,#142b47,#091526 72%);box-shadow:0 14px 30px rgba(0,0,0,.52),inset 0 1px 0 rgba(255,255,255,.1),inset 0 -2px 0 rgba(0,0,0,.42)}.title{height:32px;display:flex;align-items:center;justify-content:center;gap:9px;font-size:15px;font-weight:900;letter-spacing:1.1px;text-transform:uppercase;text-shadow:0 2px 5px #000}.dot{width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 13px var(--green)}.drive-area{height:calc(100% - 32px);display:grid;grid-template-columns:31% 69%;gap:8px;padding:4px 9px 9px}.left-controls{display:flex;flex-direction:column;justify-content:space-between;gap:6px;min-width:0}.btn{border:0;color:#fff;font-weight:900;letter-spacing:.5px;background:linear-gradient(145deg,#38b8ff,#087fdc 53%,#004eaa);box-shadow:0 9px 15px rgba(0,0,0,.38),inset 0 3px 4px rgba(255,255,255,.38),inset 0 -5px 7px rgba(0,30,80,.42);text-shadow:0 2px 3px rgba(0,0,0,.45)}.btn:active,.btn.pressed{transform:translateY(2px);box-shadow:0 4px 7px rgba(0,0,0,.45),inset 0 4px 8px rgba(0,20,60,.5)}.btn.big{height:48px;border-radius:16px;font-size:11px}.btn.small{height:38px;width:80%;align-self:center;border-radius:14px;font-size:10px}.btn.off{background:linear-gradient(145deg,#354861,#1b2d43 55%,#0c1726);color:#c6d4e2}.btn.stop{background:linear-gradient(145deg,#ff6f82,#ef304b 55%,#a80f27)}.readouts{display:grid;grid-template-columns:1fr 1fr;gap:5px}.mini{padding:6px 2px;border-radius:12px;background:linear-gradient(145deg,#182f4b,#0a1728);box-shadow:0 5px 9px rgba(0,0,0,.35),inset 0 1px rgba(255,255,255,.08);text-align:center}.mini span{display:block;font-size:8px;color:var(--muted);font-weight:900;letter-spacing:.7px}.mini b{font-size:15px}.right-controls{min-width:0;display:grid;grid-template-rows:28px minmax(0,1fr) 46px;gap:5px;align-items:center}.controlbox{width:88%;justify-self:center;padding:4px 10px;border-radius:15px;background:linear-gradient(145deg,#182f4b,#0a1728);box-shadow:0 6px 12px rgba(0,0,0,.35),inset 0 1px rgba(255,255,255,.08)}.rhead{display:flex;justify-content:space-between;font-size:9px;font-weight:900;margin-bottom:1px}.speedbox .rhead{font-size:12px}.joywrap{min-height:0;display:flex;align-items:center;justify-content:center}.joy{position:relative;width:min(46vw,190px);height:min(46vw,190px);max-width:100%;max-height:100%;aspect-ratio:1;border-radius:50%;touch-action:none;background:radial-gradient(circle at 35% 25%,rgba(255,255,255,.30),rgba(67,103,142,.42) 28%,rgba(18,41,68,.75) 61%,rgba(2,10,21,.96) 100%),linear-gradient(145deg,#233f61,#071426);box-shadow:18px 18px 32px rgba(0,0,0,.55),-8px -8px 20px rgba(57,108,157,.13),inset 8px 8px 18px rgba(255,255,255,.14),inset -12px -12px 25px rgba(0,0,0,.48)}.joy:before{content:"";position:absolute;width:78%;height:78%;left:11%;top:11%;border-radius:50%;background:radial-gradient(circle at center,rgba(16,141,255,.08),rgba(9,23,40,.35) 62%,rgba(0,0,0,.42));box-shadow:inset 10px 10px 22px rgba(0,0,0,.34),inset -9px -9px 18px rgba(93,145,192,.10)}.axisH,.axisV{position:absolute;z-index:2;border-radius:20px;background:linear-gradient(145deg,#3d5870,#122338);box-shadow:inset 2px 2px 5px rgba(255,255,255,.11),inset -2px -2px 5px rgba(0,0,0,.45)}.axisH{width:52%;height:5px;left:24%;top:50%}.axisV{height:52%;width:5px;top:24%;left:50%}.stick{position:absolute;z-index:5;left:32%;top:32%;width:36%;height:36%;border-radius:50%;pointer-events:none;background:radial-gradient(circle at 30% 22%,#fff,#bfe6ff 20%,#268fff 48%,#064bbd 78%,#021c56 100%);box-shadow:0 20px 22px rgba(0,0,0,.48),inset 8px 8px 14px rgba(255,255,255,.55),inset -10px -12px 18px rgba(0,0,0,.42),0 0 24px rgba(0,120,255,.48)}.stick:before{content:"";position:absolute;width:48%;height:24%;border-radius:50%;left:18%;top:13%;background:rgba(255,255,255,.45);filter:blur(1px);transform:rotate(-20deg)}.joyText{position:absolute;z-index:6;left:15%;bottom:5%;width:70%;height:25%;pointer-events:none}.joyText svg{width:100%;height:100%;overflow:visible}.joyText text{font-size:9px;font-weight:900;letter-spacing:1.2px;fill:#dcecff;opacity:.9}.range{width:100%;height:22px;margin:0;appearance:none;-webkit-appearance:none;background:transparent;touch-action:none}.range::-webkit-slider-runnable-track{height:7px;border-radius:8px;background:#263d55;box-shadow:inset 0 2px 4px rgba(0,0,0,.55)}.range::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;width:22px;height:22px;margin-top:-8px;border-radius:50%;background:radial-gradient(circle at 30% 22%,#fff,#8ed5ff 34%,#0077ff 75%,#003d99);box-shadow:0 6px 10px rgba(0,0,0,.45),inset 3px 3px 6px rgba(255,255,255,.52),inset -3px -3px 6px rgba(0,0,0,.28)}.trimbox{width:62%;padding:3px 9px}.trimbox .range{height:14px}.trimbox .range::-webkit-slider-thumb{width:16px;height:16px;margin-top:-5px}.arm{height:calc(100% - 32px);display:grid;grid-template-rows:repeat(6,minmax(0,1fr));gap:4px;padding:3px 9px 9px}.servo{min-height:0;display:grid;grid-template-columns:62px 1fr 42px;align-items:center;gap:7px;padding:2px 9px;border-radius:14px;background:linear-gradient(145deg,#172f4b,#091627);box-shadow:0 4px 9px rgba(0,0,0,.34),inset 0 1px rgba(255,255,255,.07)}.name{font-size:18px;font-weight:900}.name small{display:block;color:var(--muted);font-size:11px;margin-top:1px;font-weight:800}.angle{text-align:right;font-size:15px;font-weight:900}.danger{outline:2px solid #ff4059}@media(max-height:700px){.app{grid-template-rows:46% 54%}.title{height:29px;font-size:13px}.drive-area,.arm{height:calc(100% - 29px)}.btn.big{height:42px}.btn.small{height:33px}.right-controls{grid-template-rows:26px minmax(0,1fr) 41px}.joy{width:min(42vw,170px);height:min(42vw,170px)}.servo{padding:1px 8px}.name{font-size:16px}.name small{font-size:10px}}
+</style></head><body><main class="app"><section class="panel"><div class="title"><span class="dot"></span>Mobile Robotic Manipulator</div><div class="drive-area"><div class="left-controls"><button id="lightButton" class="btn big off" onclick="toggleLight()">LIGHT OFF</button><button id="buzzerButton" class="btn small">HOLD HORN</button><button id="gyroButton" class="btn small" onclick="toggleGyro()">TILT ON</button><button class="btn big stop" onclick="emergencyStop()">STOP</button><div class="readouts"><div class="mini"><span>STEER</span><b id="xd">0</b></div><div class="mini"><span>DRIVE</span><b id="yd">0</b></div></div></div><div class="right-controls"><div class="controlbox trimbox"><div class="rhead"><span>TRIM L/R</span><span id="trimValue">0</span></div><input id="trim" class="range" type="range" min="-25" max="25" value="0"></div><div class="joywrap"><div id="joy" class="joy"><div class="axisH"></div><div class="axisV"></div><div id="stick" class="stick"></div><div class="joyText"><svg viewBox="0 0 210 58"><path id="uTextPath" d="M20 0 Q105 65 199 0" fill="none"/><text><textPath href="#uTextPath" startOffset="50%" text-anchor="middle">360° SMOOTH DRIVE</textPath></text></svg></div></div></div><div class="controlbox speedbox"><div class="rhead"><span>SPEED</span><span id="speedValue">55%</span></div><input id="speed" class="range" type="range" min="15" max="100" value="55"></div></div></div></section><section class="panel"><div class="title">Six-Axis Robotic Arm</div><div class="arm">
+<div class="servo"><div class="name">A<small>Gripper</small></div><input class="range" type="range" min="0" max="180" value="0" data-servo="A"><div id="valueA" class="angle">0°</div></div>
+<div class="servo"><div class="name">B<small>Roll</small></div><input class="range" type="range" min="0" max="180" value="0" data-servo="B"><div id="valueB" class="angle">0°</div></div>
+<div class="servo"><div class="name">C<small>Pitch</small></div><input class="range" type="range" min="0" max="180" value="94" data-servo="C"><div id="valueC" class="angle">94°</div></div>
+<div class="servo"><div class="name">D<small>Elbow</small></div><input class="range" type="range" min="0" max="180" value="16" data-servo="D"><div id="valueD" class="angle">16°</div></div>
+<div class="servo"><div class="name">E<small>Shoulder</small></div><input class="range" type="range" min="0" max="180" value="180" data-servo="E"><div id="valueE" class="angle">180°</div></div>
+<div class="servo"><div class="name">F<small>Base</small></div><input class="range" type="range" min="0" max="180" value="73" data-servo="F"><div id="valueF" class="angle">73°</div></div>
 </div></section></main><script>
-const joy=document.getElementById('joy'),stick=document.getElementById('stick'),xd=document.getElementById('xd'),yd=document.getElementById('yd'),speed=document.getElementById('speed'),trim=document.getElementById('trim');let active=false,pid=null,x=0,y=0,lastSend=0;const interval=40;speed.oninput=()=>speedValue.textContent=speed.value+'%';trim.oninput=()=>trimValue.textContent=trim.value;function sendDrive(force=false){let n=Date.now();if(!force&&n-lastSend<interval)return;lastSend=n;fetch(`/drive?x=${x}&y=${y}&speed=${speed.value}&trim=${trim.value}`,{cache:'no-store'}).catch(()=>{})}function move(cx,cy){let r=joy.getBoundingClientRect(),mx=r.left+r.width/2,my=r.top+r.height/2,rad=r.width*.31,dx=cx-mx,dy=cy-my,d=Math.hypot(dx,dy);if(d>rad){dx*=rad/d;dy*=rad/d}stick.style.transform=`translate(${dx}px,${dy}px)`;x=Math.round(dx/rad*100);y=Math.round(-dy/rad*100);if(Math.abs(x)<5)x=0;if(Math.abs(y)<5)y=0;xd.textContent=x;yd.textContent=y;sendDrive()}function reset(){active=false;pid=null;x=0;y=0;stick.style.transform='translate(0,0)';xd.textContent='0';yd.textContent='0';sendDrive(true)}joy.onpointerdown=e=>{e.preventDefault();active=true;pid=e.pointerId;joy.setPointerCapture(pid);move(e.clientX,e.clientY)};joy.onpointermove=e=>{if(active&&e.pointerId===pid){e.preventDefault();move(e.clientX,e.clientY)}};joy.onpointerup=e=>{if(e.pointerId===pid)reset()};joy.onpointercancel=reset;joy.onlostpointercapture=reset;setInterval(()=>{if(active)sendDrive(true)},160);function emergencyStop(){reset();fetch('/stop',{cache:'no-store'}).catch(()=>{})}let gyroEnabled=true,headlightEnabled=false;function toggleGyro(){gyroEnabled=!gyroEnabled;fetch(`/tilt-enable?state=${gyroEnabled?1:0}`,{cache:'no-store'}).catch(()=>{});updateButtons()}function toggleLight(){headlightEnabled=!headlightEnabled;fetch(`/light?state=${headlightEnabled?1:0}`,{cache:'no-store'}).catch(()=>{});updateButtons()}function updateButtons(){gyroButton.textContent=gyroEnabled?'TILT ON':'TILT OFF';gyroButton.classList.toggle('off',!gyroEnabled);lightButton.textContent=headlightEnabled?'LIGHT ON':'LIGHT OFF';lightButton.classList.toggle('off',!headlightEnabled)}const horn=document.getElementById('buzzerButton');let held=false,ht=null;function hornOn(e){e&&e.preventDefault();if(held)return;held=true;horn.classList.add('pressed');fetch('/buzzer?state=1').catch(()=>{});ht=setInterval(()=>fetch('/buzzer?state=1').catch(()=>{}),300)}function hornOff(e){e&&e.preventDefault();held=false;horn.classList.remove('pressed');clearInterval(ht);fetch('/buzzer?state=0').catch(()=>{})}horn.onpointerdown=hornOn;horn.onpointerup=hornOff;horn.onpointercancel=hornOff;horn.onpointerleave=e=>{if(held)hornOff(e)};document.querySelectorAll('.servo input').forEach(sl=>{let t;sl.oninput=()=>{let id=sl.dataset.servo,a=Number(sl.value);document.getElementById('value'+id).textContent=a+'°';clearTimeout(t);t=setTimeout(()=>fetch(`/servo?id=${id}&angle=${a}`,{cache:'no-store'}).catch(()=>{}),18)};sl.onchange=()=>fetch(`/servo?id=${sl.dataset.servo}&angle=${sl.value}`,{cache:'no-store'}).catch(()=>{})});function status(){fetch('/status',{cache:'no-store'}).then(r=>r.json()).then(d=>{gyroEnabled=!!d.tiltEnabled;headlightEnabled=!!d.light;updateButtons();gyroButton.classList.toggle('danger',!!d.danger)}).catch(()=>{})}setInterval(status,220);status();document.addEventListener('visibilitychange',()=>{if(document.hidden){emergencyStop();hornOff()}});window.addEventListener('pagehide',()=>{navigator.sendBeacon('/stop');navigator.sendBeacon('/buzzer?state=0')});let lastTouch=0;document.addEventListener('touchend',e=>{let n=Date.now();if(n-lastTouch<320)e.preventDefault();lastTouch=n},{passive:false});document.addEventListener('gesturestart',e=>e.preventDefault());document.addEventListener('dblclick',e=>e.preventDefault());
+document.addEventListener('contextmenu',e=>e.preventDefault());document.addEventListener('selectstart',e=>e.preventDefault());document.addEventListener('gesturestart',e=>e.preventDefault());document.addEventListener('dblclick',e=>e.preventDefault());let lastTouch=0;document.addEventListener('touchend',e=>{const n=Date.now();if(n-lastTouch<320)e.preventDefault();lastTouch=n},{passive:false});
+const joy=document.getElementById('joy'),stick=document.getElementById('stick'),xd=document.getElementById('xd'),yd=document.getElementById('yd'),speed=document.getElementById('speed'),trim=document.getElementById('trim');let active=false,pid=null,x=0,y=0,lastSend=0;const interval=42;speed.oninput=()=>speedValue.textContent=speed.value+'%';trim.oninput=()=>trimValue.textContent=trim.value;function sendDrive(force=false){const n=Date.now();if(!force&&n-lastSend<interval)return;lastSend=n;fetch(`/drive?x=${x}&y=${y}&speed=${speed.value}&trim=${trim.value}`,{cache:'no-store'}).catch(()=>{})}function move(cx,cy){const r=joy.getBoundingClientRect(),mx=r.left+r.width/2,my=r.top+r.height/2,rad=r.width*.31;let dx=cx-mx,dy=cy-my,d=Math.hypot(dx,dy);if(d>rad){dx*=rad/d;dy*=rad/d}stick.style.transform=`translate(${dx}px,${dy}px)`;x=Math.round(dx/rad*100);y=Math.round(-dy/rad*100);if(Math.abs(x)<5)x=0;if(Math.abs(y)<5)y=0;xd.textContent=x;yd.textContent=y;sendDrive()}function reset(){active=false;pid=null;x=0;y=0;stick.style.transform='translate(0,0)';xd.textContent='0';yd.textContent='0';sendDrive(true)}joy.onpointerdown=e=>{e.preventDefault();active=true;pid=e.pointerId;joy.setPointerCapture(pid);move(e.clientX,e.clientY)};joy.onpointermove=e=>{if(active&&e.pointerId===pid){e.preventDefault();move(e.clientX,e.clientY)}};joy.onpointerup=e=>{if(e.pointerId===pid)reset()};joy.onpointercancel=reset;joy.onlostpointercapture=reset;setInterval(()=>{if(active)sendDrive(true)},160);function emergencyStop(){reset();fetch('/stop',{cache:'no-store'}).catch(()=>{})}let gyroEnabled=true,headlightEnabled=false;function toggleGyro(){gyroEnabled=!gyroEnabled;fetch(`/tilt-enable?state=${gyroEnabled?1:0}`,{cache:'no-store'}).catch(()=>{});updateButtons()}function toggleLight(){headlightEnabled=!headlightEnabled;fetch(`/light?state=${headlightEnabled?1:0}`,{cache:'no-store'}).catch(()=>{});updateButtons()}function updateButtons(){gyroButton.textContent=gyroEnabled?'TILT ON':'TILT OFF';gyroButton.classList.toggle('off',!gyroEnabled);lightButton.textContent=headlightEnabled?'LIGHT ON':'LIGHT OFF';lightButton.classList.toggle('off',!headlightEnabled)}const horn=document.getElementById('buzzerButton');let held=false,ht=null;function hornOn(e){e&&e.preventDefault();if(held)return;held=true;horn.classList.add('pressed');fetch('/buzzer?state=1').catch(()=>{});ht=setInterval(()=>fetch('/buzzer?state=1').catch(()=>{}),300)}function hornOff(e){e&&e.preventDefault();held=false;horn.classList.remove('pressed');clearInterval(ht);fetch('/buzzer?state=0').catch(()=>{})}horn.onpointerdown=hornOn;horn.onpointerup=hornOff;horn.onpointercancel=hornOff;horn.onpointerleave=e=>{if(held)hornOff(e)};document.querySelectorAll('.servo input').forEach(sl=>{let t;sl.oninput=()=>{const id=sl.dataset.servo,a=Number(sl.value);document.getElementById('value'+id).textContent=a+'°';clearTimeout(t);t=setTimeout(()=>fetch(`/servo?id=${id}&angle=${a}`,{cache:'no-store'}).catch(()=>{}),18)};sl.onchange=()=>fetch(`/servo?id=${sl.dataset.servo}&angle=${sl.value}`,{cache:'no-store'}).catch(()=>{})});function status(){fetch('/status',{cache:'no-store'}).then(r=>r.json()).then(d=>{gyroEnabled=!!d.tiltEnabled;headlightEnabled=!!d.light;updateButtons();gyroButton.classList.toggle('danger',!!d.danger)}).catch(()=>{})}setInterval(status,220);status();document.addEventListener('visibilitychange',()=>{if(document.hidden){emergencyStop();hornOff()}});window.addEventListener('pagehide',()=>{navigator.sendBeacon('/stop');navigator.sendBeacon('/buzzer?state=0')});
 </script></body></html>
 )rawliteral";
 
@@ -151,6 +159,7 @@ void writeLogicOutput(
 }
 
 void setBuzzer(bool state) {
+  if(state){beepSequenceActive=false;beepPulsesRemaining=0;}
   buzzerOn = state;
 
   writeLogicOutput(
@@ -162,6 +171,40 @@ void setBuzzer(bool state) {
   if (state) {
     lastBuzzerRefreshTime = millis();
   }
+}
+
+void startBeepSequence(uint8_t pulses){
+  if(buzzerOn) return;
+  beepSequenceActive=true;
+  beepPulsesRemaining=pulses;
+  beepOutputState=true;
+  writeLogicOutput(BUZZER_PIN,true,BUZZER_ACTIVE_HIGH);
+  beepPhaseTime=millis();
+}
+
+void updateBeepSequence(){
+  if(!beepSequenceActive||buzzerOn)return;
+  unsigned long now=millis();
+  if(beepOutputState){
+    if(now-beepPhaseTime>=BEEP_ON_MS){
+      beepOutputState=false;
+      writeLogicOutput(BUZZER_PIN,false,BUZZER_ACTIVE_HIGH);
+      beepPhaseTime=now;
+      if(beepPulsesRemaining>0)beepPulsesRemaining--;
+      if(beepPulsesRemaining==0)beepSequenceActive=false;
+    }
+  }else if(now-beepPhaseTime>=BEEP_OFF_MS){
+    beepOutputState=true;
+    writeLogicOutput(BUZZER_PIN,true,BUZZER_ACTIVE_HIGH);
+    beepPhaseTime=now;
+  }
+}
+
+void monitorWiFiClients(){
+  int clients=WiFi.softAPgetStationNum();
+  if(clients>previousClientCount)startBeepSequence(1);
+  else if(clients<previousClientCount)startBeepSequence(2);
+  previousClientCount=clients;
 }
 
 void setHeadlight(bool state) {
@@ -491,7 +534,7 @@ void updateMPU6050() {
     }
 
     dangerousTilt = true;
-    stopMotors();
+    hardStopMotors();
   }
   else if (
     dangerousTilt &&
@@ -505,6 +548,21 @@ void updateMPU6050() {
   }
 }
 
+void retryMPUDetection(){
+  static unsigned long lastRetry=0;
+  if(mpuDetected||millis()-lastRetry<3000)return;
+  lastRetry=millis();
+  mpuDetected=mpu6050.begin(0x68,&MPU_WIRE);
+  if(!mpuDetected)mpuDetected=mpu6050.begin(0x69,&MPU_WIRE);
+  if(mpuDetected){
+    mpu6050.setAccelerometerRange(MPU6050_RANGE_8_G);
+    mpu6050.setGyroRange(MPU6050_RANGE_500_DEG);
+    mpu6050.setFilterBandwidth(MPU6050_BAND_21_HZ);
+    tiltProtectionEnabled=true;
+    calibrateMPU();
+  }
+}
+
 void handleMainPage() {
   server.send_P(
     200,
@@ -515,21 +573,23 @@ void handleMainPage() {
 
 void handleDrive(){
   if(!server.hasArg("x")||!server.hasArg("y")){stopMotors();server.send(400,"text/plain","Missing joystick values");return;}
-  if(tiltProtectionEnabled&&dangerousTilt){stopMotors();server.send(423,"text/plain","Drive locked by tilt protection");return;}
-  int steering=-constrain(server.arg("x").toInt(),-100,100);
-  int throttle=-constrain(server.arg("y").toInt(),-100,100);
+  if(tiltProtectionEnabled&&dangerousTilt){hardStopMotors();server.send(423,"text/plain","Drive locked by tilt protection");return;}
+  int rawX=constrain(server.arg("x").toInt(),-100,100);
+  int rawY=constrain(server.arg("y").toInt(),-100,100);
+  int steering=-rawX;
+  int throttle=-rawY;
+  if(rawY<0) steering=-steering;
   int speedPercent=server.hasArg("speed")?constrain(server.arg("speed").toInt(),15,100):55;
   int trimValue=server.hasArg("trim")?constrain(server.arg("trim").toInt(),-25,25):0;
   steering=applyJoystickDeadZone(steering);
   throttle=applyJoystickDeadZone(throttle);
+  if(throttle!=0) steering=constrain(steering+trimValue,-100,100);
   int leftPercentage=throttle+steering;
   int rightPercentage=throttle-steering;
   int largestMagnitude=max(abs(leftPercentage),abs(rightPercentage));
   if(largestMagnitude>100){leftPercentage=leftPercentage*100/largestMagnitude;rightPercentage=rightPercentage*100/largestMagnitude;}
   leftPercentage=leftPercentage*speedPercent/100;
   rightPercentage=rightPercentage*speedPercent/100;
-  if(trimValue>0)leftPercentage=leftPercentage*(100-trimValue)/100;
-  if(trimValue<0)rightPercentage=rightPercentage*(100+trimValue)/100;
   int leftPWM=leftPercentage==0?0:percentageToPWM(leftPercentage)*(leftPercentage<0?-1:1);
   int rightPWM=rightPercentage==0?0:percentageToPWM(rightPercentage)*(rightPercentage<0?-1:1);
   driveMotors(leftPWM,rightPWM);
@@ -864,13 +924,11 @@ void setup() {
   MPU_WIRE.begin(
     MPU_SDA_PIN,
     MPU_SCL_PIN,
-    400000
+    100000
   );
 
-  mpuDetected = mpu6050.begin(
-    0x68,
-    &MPU_WIRE
-  );
+  mpuDetected = mpu6050.begin(0x68, &MPU_WIRE);
+  if (!mpuDetected) mpuDetected = mpu6050.begin(0x69, &MPU_WIRE);
 
   if (mpuDetected) {
 
@@ -1010,6 +1068,9 @@ void loop() {
   server.handleClient();
 
   updateMPU6050();
+  retryMPUDetection();
+  monitorWiFiClients();
+  updateBeepSequence();
   updateMotorRamp();
   updateServoRamp();
 
