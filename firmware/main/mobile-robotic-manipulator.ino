@@ -2,8 +2,6 @@
 #include <WebServer.h>
 #include <Wire.h>
 #include <Adafruit_PWMServoDriver.h>
-#include <Adafruit_MPU6050.h>
-#include <Adafruit_Sensor.h>
 #include <math.h>
 
 const char* WIFI_NAME = "Mobile-Robotic-Manipulator";
@@ -90,28 +88,32 @@ const uint8_t SERVO_F_CHANNEL = 10;
 const uint16_t PCA_SERVO_MIN = 102;
 const uint16_t PCA_SERVO_MAX = 512;
 
-Adafruit_MPU6050 mpu6050;
+// MPU6050 raw-register configuration
+#define MPU_ADDRESS   0x68
+#define PWR_MGMT_1    0x6B
+#define CONFIG_REG    0x1A
+#define GYRO_CONFIG   0x1B
+#define ACCEL_CONFIG  0x1C
+#define DATA_START    0x3B
+#define WHO_AM_I      0x75
 
 bool mpuDetected = false;
-
 bool tiltProtectionEnabled = true;
-
 bool dangerousTilt = false;
+bool tiltAlarmActive = false;
 
 float rollAngle = 0.0f;
 float pitchAngle = 0.0f;
 
-float rollOffset = 0.0f;
-float pitchOffset = 0.0f;
+float gyroOffsetX = 0.0f;
+float gyroOffsetY = 0.0f;
+float gyroOffsetZ = 0.0f;
 
-float filteredRoll = 0.0f;
-float filteredPitch = 0.0f;
-
-const float TILT_STOP_ANGLE = 45.0f;
-const float TILT_RESET_ANGLE = 40.0f;
+const float TILT_STOP_ANGLE = 40.0f;
 
 const unsigned long MPU_INTERVAL_MS = 20;
 unsigned long lastMPUReadTime = 0;
+unsigned long previousMPUMicros = 0;
 
 const unsigned long STATUS_INTERVAL_MS = 150;
 
@@ -162,9 +164,10 @@ void setBuzzer(bool state) {
   if(state){beepSequenceActive=false;beepPulsesRemaining=0;}
   buzzerOn = state;
 
+  // Tilt alarm has priority over horn and short beep sequences.
   writeLogicOutput(
     BUZZER_PIN,
-    buzzerOn,
+    tiltAlarmActive || buzzerOn,
     BUZZER_ACTIVE_HIGH
   );
 
@@ -183,7 +186,7 @@ void startBeepSequence(uint8_t pulses){
 }
 
 void updateBeepSequence(){
-  if(!beepSequenceActive||buzzerOn)return;
+  if(tiltAlarmActive||!beepSequenceActive||buzzerOn)return;
   unsigned long now=millis();
   if(beepOutputState){
     if(now-beepPhaseTime>=BEEP_ON_MS){
@@ -375,24 +378,92 @@ void updateServoRamp(){
   if(f!=armAngleF)writeArmNow('F',f);
 }
 
-void calculateRawTilt(
-  float ax,
-  float ay,
-  float az,
-  float& rawRoll,
-  float& rawPitch
-) {
-  rawRoll =
-    atan2f(
-      ay,
-      sqrtf(ax * ax + az * az)
-    ) * 180.0f / PI;
+void writeMPURegister(uint8_t reg, uint8_t value) {
+  MPU_WIRE.beginTransmission(MPU_ADDRESS);
+  MPU_WIRE.write(reg);
+  MPU_WIRE.write(value);
+  MPU_WIRE.endTransmission();
+}
 
-  rawPitch =
-    atan2f(
-      -ax,
-      sqrtf(ay * ay + az * az)
-    ) * 180.0f / PI;
+uint8_t readMPURegister(uint8_t reg) {
+  MPU_WIRE.beginTransmission(MPU_ADDRESS);
+  MPU_WIRE.write(reg);
+
+  if (MPU_WIRE.endTransmission(false) != 0) {
+    return 0xFF;
+  }
+
+  MPU_WIRE.requestFrom(MPU_ADDRESS, (uint8_t)1, true);
+
+  if (MPU_WIRE.available()) {
+    return MPU_WIRE.read();
+  }
+
+  return 0xFF;
+}
+
+bool readMPUSensor(
+  int16_t &ax,
+  int16_t &ay,
+  int16_t &az,
+  int16_t &temperature,
+  int16_t &gx,
+  int16_t &gy,
+  int16_t &gz
+) {
+  MPU_WIRE.beginTransmission(MPU_ADDRESS);
+  MPU_WIRE.write(DATA_START);
+
+  if (MPU_WIRE.endTransmission(false) != 0) {
+    return false;
+  }
+
+  uint8_t received =
+    MPU_WIRE.requestFrom(MPU_ADDRESS, (uint8_t)14, true);
+
+  if (received != 14 || MPU_WIRE.available() != 14) {
+    return false;
+  }
+
+  ax = (int16_t)((MPU_WIRE.read() << 8) | MPU_WIRE.read());
+  ay = (int16_t)((MPU_WIRE.read() << 8) | MPU_WIRE.read());
+  az = (int16_t)((MPU_WIRE.read() << 8) | MPU_WIRE.read());
+
+  temperature =
+    (int16_t)((MPU_WIRE.read() << 8) | MPU_WIRE.read());
+
+  gx = (int16_t)((MPU_WIRE.read() << 8) | MPU_WIRE.read());
+  gy = (int16_t)((MPU_WIRE.read() << 8) | MPU_WIRE.read());
+  gz = (int16_t)((MPU_WIRE.read() << 8) | MPU_WIRE.read());
+
+  return true;
+}
+
+bool initializeMPU6050() {
+  uint8_t deviceID = readMPURegister(WHO_AM_I);
+
+  Serial.print("MPU6050 WHO_AM_I: 0x");
+  Serial.println(deviceID, HEX);
+
+  if (deviceID != 0x68 && deviceID != 0x70) {
+    return false;
+  }
+
+  // Wake sensor and use its internal clock.
+  writeMPURegister(PWR_MGMT_1, 0x00);
+  delay(100);
+
+  // Digital low-pass filter.
+  writeMPURegister(CONFIG_REG, 0x03);
+
+  // Gyroscope range: ±250 degrees/second.
+  writeMPURegister(GYRO_CONFIG, 0x00);
+
+  // Accelerometer range: ±2g.
+  writeMPURegister(ACCEL_CONFIG, 0x00);
+
+  delay(100);
+  return true;
 }
 
 void calibrateMPU() {
@@ -400,63 +471,93 @@ void calibrateMPU() {
     return;
   }
 
-  Serial.println(
-    "Keep the UGV flat and still."
-  );
+  const int requiredSamples = 1000;
 
-  Serial.println(
-    "Calibrating MPU6050..."
-  );
+  long gyroTotalX = 0;
+  long gyroTotalY = 0;
+  long gyroTotalZ = 0;
+  int successfulSamples = 0;
 
-  const int samples = 120;
+  Serial.println("Keep the Mobile Robotic Manipulator flat and still.");
+  Serial.println("Calibrating MPU6050...");
 
-  float rollTotal = 0.0f;
-  float pitchTotal = 0.0f;
+  hardStopMotors();
+  delay(1500);
 
-  for (int i = 0; i < samples; i++) {
+  while (successfulSamples < requiredSamples) {
+    int16_t ax, ay, az;
+    int16_t temperature;
+    int16_t gx, gy, gz;
 
-    sensors_event_t acceleration;
-    sensors_event_t gyro;
-    sensors_event_t temperature;
+    if (readMPUSensor(
+      ax, ay, az,
+      temperature,
+      gx, gy, gz
+    )) {
+      gyroTotalX += gx;
+      gyroTotalY += gy;
+      gyroTotalZ += gz;
+      successfulSamples++;
+    }
 
-    mpu6050.getEvent(
-      &acceleration,
-      &gyro,
-      &temperature
-    );
-
-    float rawRoll;
-    float rawPitch;
-
-    calculateRawTilt(
-      acceleration.acceleration.x,
-      acceleration.acceleration.y,
-      acceleration.acceleration.z,
-      rawRoll,
-      rawPitch
-    );
-
-    rollTotal += rawRoll;
-    pitchTotal += rawPitch;
-
-    delay(10);
+    delay(2);
   }
 
-  rollOffset = rollTotal / samples;
-  pitchOffset = pitchTotal / samples;
+  gyroOffsetX = gyroTotalX / (float)successfulSamples;
+  gyroOffsetY = gyroTotalY / (float)successfulSamples;
+  gyroOffsetZ = gyroTotalZ / (float)successfulSamples;
 
-  filteredRoll = 0.0f;
-  filteredPitch = 0.0f;
+  int16_t axRaw, ayRaw, azRaw;
+  int16_t temperatureRaw;
+  int16_t gxRaw, gyRaw, gzRaw;
 
-  Serial.print("Roll offset: ");
-  Serial.println(rollOffset, 2);
+  if (readMPUSensor(
+    axRaw, ayRaw, azRaw,
+    temperatureRaw,
+    gxRaw, gyRaw, gzRaw
+  )) {
+    float ax = axRaw / 16384.0f;
+    float ay = ayRaw / 16384.0f;
+    float az = azRaw / 16384.0f;
 
-  Serial.print("Pitch offset: ");
-  Serial.println(pitchOffset, 2);
+    rollAngle =
+      atan2f(ay, az) * 180.0f / PI;
 
-  Serial.println(
-    "MPU6050 calibration complete."
-  );
+    pitchAngle =
+      atan2f(
+        -ax,
+        sqrtf((ay * ay) + (az * az))
+      ) * 180.0f / PI;
+  }
+
+  previousMPUMicros = micros();
+
+  Serial.println("MPU6050 calibration complete.");
+}
+
+void setTiltAlarm(bool active) {
+  tiltAlarmActive = active;
+
+  if (active) {
+    // Cancel ordinary beeps and force a continuous alarm.
+    beepSequenceActive = false;
+    beepPulsesRemaining = 0;
+    beepOutputState = false;
+
+    writeLogicOutput(
+      BUZZER_PIN,
+      true,
+      BUZZER_ACTIVE_HIGH
+    );
+  }
+  else {
+    // Return buzzer control to the horn state.
+    writeLogicOutput(
+      BUZZER_PIN,
+      buzzerOn,
+      BUZZER_ACTIVE_HIGH
+    );
+  }
 }
 
 void updateMPU6050() {
@@ -466,99 +567,128 @@ void updateMPU6050() {
 
   unsigned long now = millis();
 
-  if (
-    now - lastMPUReadTime <
-    MPU_INTERVAL_MS
-  ) {
+  if (now - lastMPUReadTime < MPU_INTERVAL_MS) {
     return;
   }
 
   lastMPUReadTime = now;
 
-  sensors_event_t acceleration;
-  sensors_event_t gyro;
-  sensors_event_t temperature;
+  int16_t axRaw, ayRaw, azRaw;
+  int16_t temperatureRaw;
+  int16_t gxRaw, gyRaw, gzRaw;
 
-  mpu6050.getEvent(
-    &acceleration,
-    &gyro,
-    &temperature
-  );
-
-  float rawRoll;
-  float rawPitch;
-
-  calculateRawTilt(
-    acceleration.acceleration.x,
-    acceleration.acceleration.y,
-    acceleration.acceleration.z,
-    rawRoll,
-    rawPitch
-  );
-
-  rawRoll -= rollOffset;
-  rawPitch -= pitchOffset;
-
-  const float filterAlpha = 0.22f;
-
-  filteredRoll =
-    filteredRoll +
-    filterAlpha * (rawRoll - filteredRoll);
-
-  filteredPitch =
-    filteredPitch +
-    filterAlpha * (rawPitch - filteredPitch);
-
-  rollAngle = filteredRoll;
-  pitchAngle = filteredPitch;
-
-  if (!tiltProtectionEnabled) {
-    dangerousTilt = false;
+  if (!readMPUSensor(
+    axRaw, ayRaw, azRaw,
+    temperatureRaw,
+    gxRaw, gyRaw, gzRaw
+  )) {
+    Serial.println("MPU6050 READ ERROR");
     return;
   }
 
-  bool thresholdExceeded =
-    abs(rollAngle) >= TILT_STOP_ANGLE ||
-    abs(pitchAngle) >= TILT_STOP_ANGLE;
+  unsigned long currentMicros = micros();
 
-  bool safelyRecovered =
-    abs(rollAngle) <= TILT_RESET_ANGLE &&
-    abs(pitchAngle) <= TILT_RESET_ANGLE;
+  float deltaTime =
+    (currentMicros - previousMPUMicros) / 1000000.0f;
 
-  if (thresholdExceeded) {
+  previousMPUMicros = currentMicros;
 
+  if (deltaTime <= 0.0f || deltaTime > 0.1f) {
+    deltaTime = 0.02f;
+  }
+
+  // ±2g accelerometer scaling.
+  float ax = axRaw / 16384.0f;
+  float ay = ayRaw / 16384.0f;
+  float az = azRaw / 16384.0f;
+
+  // ±250 degrees/second gyroscope scaling.
+  float gyroX =
+    (gxRaw - gyroOffsetX) / 131.0f;
+
+  float gyroY =
+    (gyRaw - gyroOffsetY) / 131.0f;
+
+  float accelerometerRoll =
+    atan2f(ay, az) * 180.0f / PI;
+
+  float accelerometerPitch =
+    atan2f(
+      -ax,
+      sqrtf((ay * ay) + (az * az))
+    ) * 180.0f / PI;
+
+  // Same complementary-filter logic that worked in the standalone test.
+  rollAngle =
+    0.98f * (rollAngle + gyroX * deltaTime) +
+    0.02f * accelerometerRoll;
+
+  pitchAngle =
+    0.98f * (pitchAngle + gyroY * deltaTime) +
+    0.02f * accelerometerPitch;
+
+  if (!tiltProtectionEnabled) {
+    dangerousTilt = false;
+
+    if (tiltAlarmActive) {
+      setTiltAlarm(false);
+    }
+
+    return;
+  }
+
+  // Yaw is intentionally ignored. Only roll and pitch trigger protection.
+  bool unsafeTilt =
+    fabsf(rollAngle) >= TILT_STOP_ANGLE ||
+    fabsf(pitchAngle) >= TILT_STOP_ANGLE;
+
+  if (unsafeTilt) {
     if (!dangerousTilt) {
       Serial.println(
-        "DANGEROUS TILT: MOTORS STOPPED"
+        "DANGEROUS TILT >= 40 DEG: MOTORS STOPPED"
       );
     }
 
     dangerousTilt = true;
+
+    // Immediate stop: bypasses the normal motor ramp.
     hardStopMotors();
+
+    if (!tiltAlarmActive) {
+      setTiltAlarm(true);
+    }
   }
-  else if (
-    dangerousTilt &&
-    safelyRecovered
-  ) {
+  else {
+    if (dangerousTilt) {
+      Serial.println(
+        "Tilt below 40 degrees: drive unlocked"
+      );
+    }
+
     dangerousTilt = false;
 
-    Serial.println(
-      "Tilt returned to safe range."
-    );
+    if (tiltAlarmActive) {
+      setTiltAlarm(false);
+    }
   }
 }
 
-void retryMPUDetection(){
-  static unsigned long lastRetry=0;
-  if(mpuDetected||millis()-lastRetry<3000)return;
-  lastRetry=millis();
-  mpuDetected=mpu6050.begin(0x68,&MPU_WIRE);
-  if(!mpuDetected)mpuDetected=mpu6050.begin(0x69,&MPU_WIRE);
-  if(mpuDetected){
-    mpu6050.setAccelerometerRange(MPU6050_RANGE_8_G);
-    mpu6050.setGyroRange(MPU6050_RANGE_500_DEG);
-    mpu6050.setFilterBandwidth(MPU6050_BAND_21_HZ);
-    tiltProtectionEnabled=true;
+void retryMPUDetection() {
+  static unsigned long lastRetry = 0;
+
+  if (
+    mpuDetected ||
+    millis() - lastRetry < 3000
+  ) {
+    return;
+  }
+
+  lastRetry = millis();
+  mpuDetected = initializeMPU6050();
+
+  if (mpuDetected) {
+    tiltProtectionEnabled = true;
+    Serial.println("MPU6050 detected.");
     calibrateMPU();
   }
 }
@@ -673,15 +803,17 @@ void handleTiltEnable() {
 
   if (!tiltProtectionEnabled) {
     dangerousTilt = false;
+    setTiltAlarm(false);
   }
   else {
     bool currentlyUnsafe =
-      abs(rollAngle) >= TILT_STOP_ANGLE ||
-      abs(pitchAngle) >= TILT_STOP_ANGLE;
+      fabsf(rollAngle) >= TILT_STOP_ANGLE ||
+      fabsf(pitchAngle) >= TILT_STOP_ANGLE;
 
     if (currentlyUnsafe) {
       dangerousTilt = true;
-      stopMotors();
+      hardStopMotors();
+      setTiltAlarm(true);
     }
   }
 
@@ -927,23 +1059,9 @@ void setup() {
     100000
   );
 
-  mpuDetected = mpu6050.begin(0x68, &MPU_WIRE);
-  if (!mpuDetected) mpuDetected = mpu6050.begin(0x69, &MPU_WIRE);
+  mpuDetected = initializeMPU6050();
 
   if (mpuDetected) {
-
-    mpu6050.setAccelerometerRange(
-      MPU6050_RANGE_8_G
-    );
-
-    mpu6050.setGyroRange(
-      MPU6050_RANGE_500_DEG
-    );
-
-    mpu6050.setFilterBandwidth(
-      MPU6050_BAND_21_HZ
-    );
-
     Serial.println(
       "MPU6050 detected."
     );
@@ -1085,6 +1203,7 @@ void loop() {
 
   if (
     buzzerOn &&
+    !tiltAlarmActive &&
     now - lastBuzzerRefreshTime >
     BUZZER_TIMEOUT_MS
   ) {
