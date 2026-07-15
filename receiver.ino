@@ -70,9 +70,24 @@ constexpr bool INVERT_RIGHT_MOTOR = false;
 constexpr bool INVERT_JOYSTICK_X = false;
 constexpr bool INVERT_JOYSTICK_Y = false;
 
-constexpr float LEFT_MOTOR_GAIN = 1.00f;
+constexpr float LEFT_MOTOR_GAIN = 1.02f;
 constexpr float RIGHT_MOTOR_GAIN = 1.00f;
+// Applied only when the joystick is commanding nearly straight travel.
+// This very slightly slows the right side to correct the remaining left arc.
+constexpr float RIGHT_MOTOR_STRAIGHT_GAIN = 0.98f;
+constexpr int STRAIGHT_TRIM_TURN_THRESHOLD = 12;
+constexpr float STEERING_GAIN_WHILE_DRIVING = 2.00f;
 constexpr int MOTOR_MINIMUM_PWM = 60;
+
+// Rear-obstacle warning: three short beeps every second, but only while
+// the operator is commanding backward movement and the rear is blocked.
+constexpr uint32_t OBSTACLE_BEEP_PERIOD_MS = 180;
+constexpr uint32_t OBSTACLE_BEEP_ON_TIME_MS = 100;
+
+// Both controls must be activated within this window to enter combined blink.
+constexpr uint32_t DUAL_BUTTON_WINDOW_MS = 500;
+constexpr uint32_t DUAL_BUTTON_BLINK_PERIOD_MS = 160;
+constexpr uint32_t DUAL_BUTTON_BLINK_ON_TIME_MS = 80;
 
 constexpr uint16_t PCA_SERVO_MIN = 110;
 constexpr uint16_t PCA_SERVO_MAX = 510;
@@ -131,10 +146,6 @@ constexpr float SERVO_ANGLE_GAIN[NUMBER_OF_POTS] = {
   1.08f, 1.08f, 1.08f, 1.08f, 1.12f, 1.08f
 };
 
-// The shoulder is the second joint above the base-rotation servo.
-// It is deliberately placed at 0 degrees when servo control is first armed.
-constexpr bool SHOULDER_STARTS_AT_ZERO = true;
-
 float rearDistanceCm = 999.0f;
 bool rearObstacleDetected = false;
 uint8_t obstacleDetectionCounter = 0;
@@ -164,6 +175,14 @@ bool communicationActive = false;
 bool previousCommunicationState = false;
 bool servosArmed = false;
 bool reverseBlocked = false;
+
+bool previousLightState = false;
+bool previousBuzzerPressed = false;
+bool dualButtonBlinkActive = false;
+uint32_t lastLightButtonEventTime = 0;
+uint32_t lastBuzzerPressTime = 0;
+uint32_t connectionSignalUntil = 0;
+uint32_t disconnectSignalUntil = 0;
 
 void storeReceivedPacket(const uint8_t *incomingData, int length) {
   if (length != sizeof(ControlPacket)) return;
@@ -311,8 +330,28 @@ void calculateMotorTargets() {
     return;
   }
 
-  int left = requestedForwardCommand + requestedTurnCommand;
-  int right = requestedForwardCommand - requestedTurnCommand;
+  // Keep pure left/right controls unchanged. While the rover is also moving
+  // forward or backward, make small sideways joystick movement more effective.
+  // At a small turn input, the inside wheel slows strongly (approximately half
+  // speed), while full corners still stop the inside wheel without reversing it.
+  int effectiveTurnCommand = requestedTurnCommand;
+  if (requestedForwardCommand != 0) {
+    effectiveTurnCommand = static_cast<int>(roundf(
+        effectiveTurnCommand * STEERING_GAIN_WHILE_DRIVING));
+
+    // Do not let partial steering reverse the inside wheel.
+    effectiveTurnCommand = constrain(effectiveTurnCommand,
+                                     -abs(requestedForwardCommand),
+                                      abs(requestedForwardCommand));
+  }
+
+  // Swap only the two backward/lower corners.
+  if (requestedForwardCommand > 0) {
+    effectiveTurnCommand = -effectiveTurnCommand;
+  }
+
+  int left = requestedForwardCommand + effectiveTurnCommand;
+  int right = requestedForwardCommand - effectiveTurnCommand;
   int highestMagnitude = max(abs(left), abs(right));
 
   if (highestMagnitude > 255) {
@@ -321,7 +360,13 @@ void calculateMotorTargets() {
   }
 
   left = constrain(static_cast<int>(roundf(left * LEFT_MOTOR_GAIN)), -255, 255);
-  right = constrain(static_cast<int>(roundf(right * RIGHT_MOTOR_GAIN)), -255, 255);
+
+  float rightGain = RIGHT_MOTOR_GAIN;
+  if (requestedForwardCommand != 0 &&
+      abs(requestedTurnCommand) <= STRAIGHT_TRIM_TURN_THRESHOLD) {
+    rightGain *= RIGHT_MOTOR_STRAIGHT_GAIN;
+  }
+  right = constrain(static_cast<int>(roundf(right * rightGain)), -255, 255);
 
   targetLeftSpeed = addMinimumMotorPwm(left);
   targetRightSpeed = addMinimumMotorPwm(right);
@@ -448,14 +493,10 @@ void updateServoTargets() {
   }
 
   if (!servosArmed) {
-    // Start all joints at the received master position, except the shoulder
-    // (the second joint above base rotation), which must begin at 0 degrees.
+    // Start every joint directly at the first valid received master position.
+    // No joint is forced through an intermediate startup angle.
     for (uint8_t i = 0; i < NUMBER_OF_POTS; i++) {
       currentServoAngle[i] = targetServoAngle[i];
-    }
-
-    if (SHOULDER_STARTS_AT_ZERO) {
-      currentServoAngle[SHOULDER] = 0.0f;
     }
 
     armServosAtMasterPosition();
@@ -547,14 +588,83 @@ void updateMpu6050() {
   mpuGyroZ = gzRaw / 131.0f;
 }
 
-void updateBuzzer() {
+void updateCombinedButtonMode() {
+  if (!communicationActive) {
+    previousLightState = false;
+    previousBuzzerPressed = false;
+    dualButtonBlinkActive = false;
+    lastLightButtonEventTime = 0;
+    lastBuzzerPressTime = 0;
+    return;
+  }
+
+  bool lightState = activePacket.lightState != 0;
+  bool buzzerPressed = activePacket.buzzerPressed != 0;
+  uint32_t now = millis();
+
+  // lightState is a toggle value, so any change represents a light-button press.
+  if (lightState != previousLightState) {
+    lastLightButtonEventTime = now;
+  }
+
+  // buzzerPressed is momentary, so use only its rising edge.
+  if (buzzerPressed && !previousBuzzerPressed) {
+    lastBuzzerPressTime = now;
+  }
+
+  bool eventsAreClose =
+      lastLightButtonEventTime != 0 &&
+      lastBuzzerPressTime != 0 &&
+      abs(static_cast<int32_t>(lastLightButtonEventTime -
+                               lastBuzzerPressTime)) <=
+          static_cast<int32_t>(DUAL_BUTTON_WINDOW_MS);
+
+  // Blink only while the buzzer button is still being held after the two
+  // button events occurred within 0.5 second. Releasing it returns to normal.
+  dualButtonBlinkActive = eventsAreClose && buzzerPressed;
+
+  previousLightState = lightState;
+  previousBuzzerPressed = buzzerPressed;
+}
+
+void updateBuzzerAndHeadlight() {
+  uint32_t now=millis();
+  if (now < connectionSignalUntil) {
+    digitalWrite(BUZZER_PIN,HIGH);
+    digitalWrite(HEADLIGHT_PIN,HIGH);
+    return;
+  }
+  if (now < disconnectSignalUntil) {
+    bool on=((now%250UL)<125UL);
+    digitalWrite(BUZZER_PIN,on);
+    digitalWrite(HEADLIGHT_PIN,on);
+    return;
+  }
+  if (!communicationActive) {
+    digitalWrite(BUZZER_PIN, LOW);
+    digitalWrite(HEADLIGHT_PIN, LOW);
+    return;
+  }
+
+  if (dualButtonBlinkActive) {
+    uint32_t phase = millis() % DUAL_BUTTON_BLINK_PERIOD_MS;
+    bool blinkOn = phase < DUAL_BUTTON_BLINK_ON_TIME_MS;
+    digitalWrite(BUZZER_PIN, blinkOn ? HIGH : LOW);
+    digitalWrite(HEADLIGHT_PIN, blinkOn ? HIGH : LOW);
+    return;
+  }
+
+  // Rear warning is active only while reverse is actually blocked.
   if (reverseBlocked) {
-    // Beep only while the operator is commanding reverse within 30 cm of an obstacle.
-    digitalWrite(BUZZER_PIN, (millis() % 300UL) < 150UL ? HIGH : LOW);
+    uint32_t phase = millis() % OBSTACLE_BEEP_PERIOD_MS;
+    digitalWrite(BUZZER_PIN,
+                 phase < OBSTACLE_BEEP_ON_TIME_MS ? HIGH : LOW);
   } else {
     digitalWrite(BUZZER_PIN,
-                 communicationActive && activePacket.buzzerPressed ? HIGH : LOW);
+                 activePacket.buzzerPressed ? HIGH : LOW);
   }
+
+  bool storedLight=activePacket.lightState; digitalWrite(HEADLIGHT_PIN, storedLight ? HIGH:LOW);
 }
 
 void setupESPNow() {
@@ -641,13 +751,10 @@ void setup() {
   Serial.println();
   Serial.print("Receiver MAC: ");
   Serial.println(WiFi.macAddress());
-  Serial.println("Receiver ready. Rear hard-stop: 30 cm. Servos wait for valid master-arm data.");
+  Serial.println("Receiver ready. Rear warning works only while reversing. Dual-button blink window: 0.5 s.");
 }
 
 void loop() {
-  updateUltrasonic();
-  updateMpu6050();
-
   uint32_t receivedTime;
   portENTER_CRITICAL(&packetMux);
   receivedTime = lastPacketReceivedTime;
@@ -660,6 +767,10 @@ void loop() {
 
   if (communicationActive && !previousCommunicationState) {
     communicationStartedTime = millis();
+    connectionSignalUntil = millis() + 500;
+  }
+  if (!communicationActive && previousCommunicationState) {
+    disconnectSignalUntil = millis() + 500;
   }
   previousCommunicationState = communicationActive;
 
@@ -675,24 +786,31 @@ void loop() {
   }
 
   if (!communicationActive) {
+    // Keep the complete rover inactive until valid ESP-NOW packets arrive.
     requestedForwardCommand = 0;
     requestedTurnCommand = 0;
     reverseBlocked = false;
+    rearObstacleDetected = false;
+    obstacleDetectionCounter = 0;
+    rearDistanceCm = 999.0f;
     stopMotorsImmediately();
     digitalWrite(HEADLIGHT_PIN, LOW);
     digitalWrite(BUZZER_PIN, LOW);
   } else {
+    // Sensors and all controlled outputs become active only after connection.
+    updateUltrasonic();
+    updateMpu6050();
+
     if (copiedNewPacket) {
       updateServoTargets();
-      digitalWrite(HEADLIGHT_PIN,
-                   activePacket.lightState ? HIGH : LOW);
     }
 
     calculateMotorTargets();
     updateMotorRamp();
   }
 
+  updateCombinedButtonMode();
   smoothlyUpdateServos();
-  updateBuzzer();
+  updateBuzzerAndHeadlight();
   printDiagnostics();
 }
