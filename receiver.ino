@@ -70,12 +70,6 @@ constexpr bool INVERT_RIGHT_MOTOR = false;
 constexpr bool INVERT_JOYSTICK_X = false;
 constexpr bool INVERT_JOYSTICK_Y = false;
 
-constexpr float LEFT_MOTOR_GAIN = 1.02f;
-constexpr float RIGHT_MOTOR_GAIN = 1.00f;
-// Applied only when the joystick is commanding nearly straight travel.
-// This very slightly slows the right side to correct the remaining left arc.
-constexpr float RIGHT_MOTOR_STRAIGHT_GAIN = 0.98f;
-constexpr int STRAIGHT_TRIM_TURN_THRESHOLD = 12;
 constexpr float STEERING_GAIN_WHILE_DRIVING = 2.00f;
 constexpr int MOTOR_MINIMUM_PWM = 60;
 
@@ -84,8 +78,21 @@ constexpr int MOTOR_MINIMUM_PWM = 60;
 constexpr uint32_t OBSTACLE_BEEP_PERIOD_MS = 180;
 constexpr uint32_t OBSTACLE_BEEP_ON_TIME_MS = 100;
 
+// MPU6050 tilt warning: 5 beeps per second while absolute roll or pitch
+// exceeds 15 degrees. Yaw/flat-ground turning is intentionally ignored.
+constexpr float MPU_TILT_WARNING_ANGLE_DEG = 15.0f;
+constexpr uint32_t MPU_TILT_BEEP_PERIOD_MS = 200;
+constexpr uint32_t MPU_TILT_BEEP_ON_TIME_MS = 100;
+
+// Disconnect indication: two short, clear buzzer-only beeps.
+// Total pattern is comfortably below half a second.
+constexpr uint32_t DISCONNECT_BEEP_ON_TIME_MS = 120;
+constexpr uint32_t DISCONNECT_BEEP_GAP_MS = 90;
+constexpr uint32_t DISCONNECT_SIGNAL_DURATION_MS =
+    DISCONNECT_BEEP_ON_TIME_MS * 2 + DISCONNECT_BEEP_GAP_MS;
+
 // Both controls must be activated within this window to enter combined blink.
-constexpr uint32_t DUAL_BUTTON_WINDOW_MS = 500;
+constexpr uint32_t DUAL_BUTTON_WINDOW_MS = 200;
 constexpr uint32_t DUAL_BUTTON_BLINK_PERIOD_MS = 160;
 constexpr uint32_t DUAL_BUTTON_BLINK_ON_TIME_MS = 80;
 
@@ -163,6 +170,9 @@ float mpuGyroX = 0.0f;
 float mpuGyroY = 0.0f;
 float mpuGyroZ = 0.0f;
 bool mpuAvailable = false;
+bool excessiveTiltDetected = false;
+float mpuTiltAngle = 0.0f;
+uint32_t lastMpuReconnectAttemptTime = 0;
 
 int requestedForwardCommand = 0;
 int requestedTurnCommand = 0;
@@ -182,7 +192,7 @@ bool dualButtonBlinkActive = false;
 uint32_t lastLightButtonEventTime = 0;
 uint32_t lastBuzzerPressTime = 0;
 uint32_t connectionSignalUntil = 0;
-uint32_t disconnectSignalUntil = 0;
+uint32_t disconnectSignalStart = 0;
 
 void storeReceivedPacket(const uint8_t *incomingData, int length) {
   if (length != sizeof(ControlPacket)) return;
@@ -359,14 +369,8 @@ void calculateMotorTargets() {
     right = static_cast<long>(right) * 255L / highestMagnitude;
   }
 
-  left = constrain(static_cast<int>(roundf(left * LEFT_MOTOR_GAIN)), -255, 255);
-
-  float rightGain = RIGHT_MOTOR_GAIN;
-  if (requestedForwardCommand != 0 &&
-      abs(requestedTurnCommand) <= STRAIGHT_TRIM_TURN_THRESHOLD) {
-    rightGain *= RIGHT_MOTOR_STRAIGHT_GAIN;
-  }
-  right = constrain(static_cast<int>(roundf(right * rightGain)), -255, 255);
+  left = constrain(left, -255, 255);
+  right = constrain(right, -255, 255);
 
   targetLeftSpeed = addMinimumMotorPwm(left);
   targetRightSpeed = addMinimumMotorPwm(right);
@@ -552,10 +556,20 @@ void setupMpu6050() {
 }
 
 void updateMpu6050() {
-  if (!mpuAvailable ||
-      millis() - lastMpuUpdateTime < MPU_UPDATE_INTERVAL_MS) return;
+  uint32_t now = millis();
 
-  lastMpuUpdateTime = millis();
+  // MPU6050 works independently of ESP-NOW. If it was not found or briefly
+  // disconnects, retry initialization once every second.
+  if (!mpuAvailable) {
+    if (now - lastMpuReconnectAttemptTime >= 1000) {
+      lastMpuReconnectAttemptTime = now;
+      setupMpu6050();
+    }
+    return;
+  }
+
+  if (now - lastMpuUpdateTime < MPU_UPDATE_INTERVAL_MS) return;
+  lastMpuUpdateTime = now;
 
   mpuWire.beginTransmission(MPU6050_ADDRESS);
   mpuWire.write(0x3B);
@@ -586,6 +600,11 @@ void updateMpu6050() {
   mpuGyroX = gxRaw / 131.0f;
   mpuGyroY = gyRaw / 131.0f;
   mpuGyroZ = gzRaw / 131.0f;
+
+  // Convert the accelerometer readings into physical roll and pitch angles.
+  // Tilt angle is the larger absolute value of roll or pitch. Yaw is ignored.
+  mpuTiltAngle = max(fabsf(mpuRoll), fabsf(mpuPitch));
+  excessiveTiltDetected = mpuTiltAngle > MPU_TILT_WARNING_ANGLE_DEG;
 }
 
 void updateCombinedButtonMode() {
@@ -634,12 +653,18 @@ void updateBuzzerAndHeadlight() {
     digitalWrite(HEADLIGHT_PIN,HIGH);
     return;
   }
-  if (now < disconnectSignalUntil) {
-    bool on=((now%250UL)<125UL);
-    digitalWrite(BUZZER_PIN,on);
-    digitalWrite(HEADLIGHT_PIN,on);
+  // The MPU6050 warning is completely independent of ESP-NOW and operates
+  // immediately after receiver power-up. It also remains active if the
+  // transmitter is disconnected.
+  if (excessiveTiltDetected) {
+    uint32_t phase = now % MPU_TILT_BEEP_PERIOD_MS;
+    digitalWrite(BUZZER_PIN,
+                 phase < MPU_TILT_BEEP_ON_TIME_MS ? HIGH : LOW);
+    digitalWrite(HEADLIGHT_PIN,
+                 communicationActive && activePacket.lightState ? HIGH : LOW);
     return;
   }
+
   if (!communicationActive) {
     digitalWrite(BUZZER_PIN, LOW);
     digitalWrite(HEADLIGHT_PIN, LOW);
@@ -654,9 +679,9 @@ void updateBuzzerAndHeadlight() {
     return;
   }
 
-  // Rear warning is active only while reverse is actually blocked.
   if (reverseBlocked) {
-    uint32_t phase = millis() % OBSTACLE_BEEP_PERIOD_MS;
+    // Rear warning is active only while reverse is actually blocked.
+    uint32_t phase = now % OBSTACLE_BEEP_PERIOD_MS;
     digitalWrite(BUZZER_PIN,
                  phase < OBSTACLE_BEEP_ON_TIME_MS ? HIGH : LOW);
   } else {
@@ -664,7 +689,8 @@ void updateBuzzerAndHeadlight() {
                  activePacket.buzzerPressed ? HIGH : LOW);
   }
 
-  bool storedLight=activePacket.lightState; digitalWrite(HEADLIGHT_PIN, storedLight ? HIGH:LOW);
+  bool storedLight = activePacket.lightState;
+  digitalWrite(HEADLIGHT_PIN, storedLight ? HIGH : LOW);
 }
 
 void setupESPNow() {
@@ -721,8 +747,9 @@ void printDiagnostics() {
       reverseBlocked);
 
   if (mpuAvailable) {
-    Serial.printf("MPU Roll:%.1f Pitch:%.1f | Servos:%s\n",
-                  mpuRoll, mpuPitch, servosArmed ? "ARMED" : "WAITING");
+    Serial.printf("MPU Roll:%.1f Pitch:%.1f TiltAngle:%.1f Alarm:%d | Servos:%s\n",
+                  mpuRoll, mpuPitch, mpuTiltAngle, excessiveTiltDetected,
+                  servosArmed ? "ARMED" : "WAITING");
   } else {
     Serial.printf("MPU:NOT FOUND | Servos:%s\n",
                   servosArmed ? "ARMED" : "WAITING");
@@ -751,10 +778,13 @@ void setup() {
   Serial.println();
   Serial.print("Receiver MAC: ");
   Serial.println(WiFi.macAddress());
-  Serial.println("Receiver ready. Rear warning works only while reversing. Dual-button blink window: 0.5 s.");
+  Serial.println("Receiver ready. MPU6050 tilt warning is active immediately from power-up. Rear warning works only while reversing.");
 }
 
 void loop() {
+  // Read the MPU6050 continuously from power-up, regardless of ESP-NOW state.
+  updateMpu6050();
+
   uint32_t receivedTime;
   portENTER_CRITICAL(&packetMux);
   receivedTime = lastPacketReceivedTime;
@@ -770,7 +800,7 @@ void loop() {
     connectionSignalUntil = millis() + 500;
   }
   if (!communicationActive && previousCommunicationState) {
-    disconnectSignalUntil = millis() + 500;
+    disconnectSignalStart = millis();
   }
   previousCommunicationState = communicationActive;
 
@@ -797,9 +827,9 @@ void loop() {
     digitalWrite(HEADLIGHT_PIN, LOW);
     digitalWrite(BUZZER_PIN, LOW);
   } else {
-    // Sensors and all controlled outputs become active only after connection.
+    // Ultrasonic and commanded outputs become active after connection.
+    // MPU6050 is already updating independently above.
     updateUltrasonic();
-    updateMpu6050();
 
     if (copiedNewPacket) {
       updateServoTargets();
