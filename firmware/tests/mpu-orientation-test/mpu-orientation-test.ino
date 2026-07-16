@@ -1,3 +1,12 @@
+// MPU6050 SDA → ESP32 GPIO18
+
+// MPU6050 SCL → ESP32 GPIO19
+
+// MPU6050 VCC → ESP32 3.3V
+
+// MPU6050 GND → ESP32 GND
+
+
 #include <Wire.h>
 #include <math.h>
 
@@ -9,6 +18,10 @@
 #define ACCEL_CONFIG 0x1C
 #define DATA_START   0x3B
 #define WHO_AM_I     0x75
+
+// MPU6050 I2C wiring
+#define MPU_SDA_PIN 18
+#define MPU_SCL_PIN 19
 
 float gyroOffsetX = 0;
 float gyroOffsetY = 0;
@@ -89,6 +102,8 @@ void calibrateGyroscope() {
 
   delay(1500);
 
+  int successfulSamples = 0;
+
   for (int i = 0; i < samples; i++) {
     int16_t ax, ay, az;
     int16_t temperature;
@@ -98,14 +113,18 @@ void calibrateGyroscope() {
       sumX += gx;
       sumY += gy;
       sumZ += gz;
+
+      successfulSamples++;
     }
 
     delay(2);
   }
 
-  gyroOffsetX = sumX / (float)samples;
-  gyroOffsetY = sumY / (float)samples;
-  gyroOffsetZ = sumZ / (float)samples;
+  if (successfulSamples > 0) {
+    gyroOffsetX = sumX / (float)successfulSamples;
+    gyroOffsetY = sumY / (float)successfulSamples;
+    gyroOffsetZ = sumZ / (float)successfulSamples;
+  }
 
   Serial.println("READY");
 }
@@ -114,8 +133,14 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
 
-  Wire.begin(21, 22);
+  // SDA → GPIO18
+  // SCL → GPIO19
+  Wire.begin(MPU_SDA_PIN, MPU_SCL_PIN);
   Wire.setClock(100000);
+
+  // Wake sensor before checking its identification
+  writeRegister(PWR_MGMT_1, 0x00);
+  delay(100);
 
   byte deviceID = readRegister(WHO_AM_I);
 
@@ -124,6 +149,7 @@ void setup() {
 
   if (deviceID != 0x70 && deviceID != 0x68) {
     Serial.println("Unsupported sensor identification.");
+
     while (true) {
       delay(100);
     }
@@ -151,9 +177,13 @@ void setup() {
   int16_t gxRaw, gyRaw, gzRaw;
 
   if (readSensor(
-    axRaw, ayRaw, azRaw,
+    axRaw,
+    ayRaw,
+    azRaw,
     temperatureRaw,
-    gxRaw, gyRaw, gzRaw
+    gxRaw,
+    gyRaw,
+    gzRaw
   )) {
     float ax = axRaw / 16384.0;
     float ay = ayRaw / 16384.0;
@@ -177,9 +207,13 @@ void loop() {
   int16_t gxRaw, gyRaw, gzRaw;
 
   if (!readSensor(
-    axRaw, ayRaw, azRaw,
+    axRaw,
+    ayRaw,
+    azRaw,
     temperatureRaw,
-    gxRaw, gyRaw, gzRaw
+    gxRaw,
+    gyRaw,
+    gzRaw
   )) {
     Serial.println("READ_ERROR");
     delay(50);
@@ -251,4 +285,3 @@ void loop() {
     Serial.println(yaw, 2);
   }
 }
-
