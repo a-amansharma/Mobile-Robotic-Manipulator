@@ -23,6 +23,13 @@
   STM32 PA9 TX → ESP32 GPIO16 RX2
   STM32 GND    → ESP32 GND
 
+  OLED SSD1306 (safe 3.3V wiring):
+  VCC → 3.3V
+  GND → GND
+  SDA → GPIO21
+  SCL → GPIO22
+  Display is rotated 180 degrees in software.
+
   Onboard blue LED:
   GPIO2
   OFF when receiver is disconnected
@@ -47,6 +54,9 @@
 #include <esp_now.h>
 #include <esp_wifi.h>
 #include <esp_arduino_version.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 
 constexpr uint8_t ESPNOW_CHANNEL = 1;
 
@@ -66,6 +76,21 @@ constexpr uint8_t STM32_TX_PIN = 17;
 
 constexpr uint8_t BLUE_LED_PIN = 2;
 
+// 0.96-inch SSD1306 OLED (I2C)
+// These pins are not used by the existing transmitter wiring.
+constexpr uint8_t OLED_SDA_PIN = 21;
+constexpr uint8_t OLED_SCL_PIN = 22;
+constexpr uint8_t OLED_I2C_ADDRESS = 0x3C;
+constexpr uint8_t OLED_WIDTH = 128;
+constexpr uint8_t OLED_HEIGHT = 64;
+constexpr int8_t OLED_RESET_PIN = -1;
+constexpr uint32_t DISPLAY_UPDATE_INTERVAL_MS = 80;
+constexpr uint16_t DISPLAY_JOYSTICK_DEADZONE = 180;
+
+// Most joystick modules give a lower Y value when pushed forward.
+// Change this to false only if the OLED arrow moves backward.
+constexpr bool JOYSTICK_FORWARD_IS_LOW = true;
+
 constexpr uint8_t NUMBER_OF_POTS = 6;
 
 constexpr uint16_t PACKET_MAGIC = 0x4D52;
@@ -80,13 +105,21 @@ constexpr uint32_t STM32_DATA_TIMEOUT_MS = 500;
 constexpr uint32_t BUTTON_DEBOUNCE_MS = 35;
 
 constexpr uint8_t JOYSTICK_FILTER_SAMPLES = 8;
-constexpr uint8_t SPEED_POT_FILTER_SAMPLES = 8;
+constexpr uint8_t SPEED_POT_FILTER_SAMPLES = 16;
+constexpr uint8_t DISPLAY_PERCENT_HYSTERESIS = 2;
 
 constexpr uint16_t CALIBRATION_SAMPLES = 150;
 constexpr uint16_t CALIBRATION_DELAY_MS = 8;
 
 // ADC noise near the minimum position is treated as zero.
 constexpr uint16_t SPEED_POT_ZERO_THRESHOLD = 40;
+
+Adafruit_SSD1306 display(
+  OLED_WIDTH,
+  OLED_HEIGHT,
+  &Wire,
+  OLED_RESET_PIN
+);
 
 // Receiver ESP32 MAC address
 uint8_t receiverMac[] = {
@@ -126,10 +159,13 @@ uint16_t joystickCenterX = 2048;
 uint16_t joystickCenterY = 2048;
 
 uint16_t currentSpeedPotValue = 0;
+uint16_t filteredSpeedPotValue = 0;
+bool speedPotFilterInitialized = false;
 
 uint32_t packetCounter = 0;
 uint32_t lastSendTime = 0;
 uint32_t lastPrintTime = 0;
+uint32_t lastDisplayUpdateTime = 0;
 uint32_t lastValidArmFrameTime = 0;
 
 bool lightState = false;
@@ -144,6 +180,477 @@ size_t armReceiveIndex = 0;
 
 volatile bool receiverConnected = false;
 volatile uint32_t lastSuccessfulSendTime = 0;
+
+bool displayAvailable = false;
+uint16_t displayJoystickX = 2048;
+uint16_t displayJoystickY = 2048;
+uint8_t stableLimitPercentage = 0;
+uint8_t stableDrivePercentage = 0;
+
+
+void drawLightIcon(int16_t x, int16_t y, bool active) {
+  if (active) {
+    display.fillCircle(x, y, 4, SSD1306_WHITE);
+  } else {
+    display.drawCircle(x, y, 4, SSD1306_WHITE);
+  }
+
+  display.drawLine(x - 2, y + 5, x + 2, y + 5, SSD1306_WHITE);
+  display.drawLine(x - 2, y + 7, x + 2, y + 7, SSD1306_WHITE);
+
+  if (active) {
+    display.drawLine(x, y - 7, x, y - 5, SSD1306_WHITE);
+    display.drawLine(x - 7, y, x - 5, y, SSD1306_WHITE);
+    display.drawLine(x + 5, y, x + 7, y, SSD1306_WHITE);
+    display.drawLine(x - 5, y - 5, x - 4, y - 4, SSD1306_WHITE);
+    display.drawLine(x + 4, y - 4, x + 5, y - 5, SSD1306_WHITE);
+  }
+}
+
+void drawSpeakerIcon(int16_t x, int16_t y, bool active) {
+  // Standard speaker icon:
+  // rectangular rear body + a four-corner speaker cone.
+  // The lower diagonal starts exactly at the body's lower-right corner.
+  constexpr int16_t bodyWidth = 4;
+  constexpr int16_t bodyTop = -3;
+  constexpr int16_t bodyBottom = 3;
+  constexpr int16_t coneRight = 10;
+  constexpr int16_t coneTop = -7;
+  constexpr int16_t coneBottom = 7;
+
+  if (active) {
+    display.fillRect(
+      x,
+      y + bodyTop,
+      bodyWidth,
+      bodyBottom - bodyTop + 1,
+      SSD1306_WHITE
+    );
+
+    // Fill the complete four-corner cone using two triangles.
+    // This keeps the lower diagonal at the proper lower-right body corner.
+    display.fillTriangle(
+      x + bodyWidth - 1, y + bodyTop,
+      x + coneRight, y + coneTop,
+      x + coneRight, y + coneBottom,
+      SSD1306_WHITE
+    );
+
+    display.fillTriangle(
+      x + bodyWidth - 1, y + bodyTop,
+      x + coneRight, y + coneBottom,
+      x + bodyWidth - 1, y + bodyBottom,
+      SSD1306_WHITE
+    );
+
+    // Three sound waves appear only while the button is pressed.
+    display.drawLine(x + 13, y - 2, x + 13, y + 2, SSD1306_WHITE);
+    display.drawLine(x + 16, y - 4, x + 16, y + 4, SSD1306_WHITE);
+    display.drawLine(x + 19, y - 6, x + 19, y + 6, SSD1306_WHITE);
+  } else {
+    display.drawRect(
+      x,
+      y + bodyTop,
+      bodyWidth,
+      bodyBottom - bodyTop + 1,
+      SSD1306_WHITE
+    );
+
+    display.drawLine(
+      x + bodyWidth - 1, y + bodyTop,
+      x + coneRight, y + coneTop,
+      SSD1306_WHITE
+    );
+    display.drawLine(
+      x + coneRight, y + coneTop,
+      x + coneRight, y + coneBottom,
+      SSD1306_WHITE
+    );
+    display.drawLine(
+      x + coneRight, y + coneBottom,
+      x + bodyWidth - 1, y + bodyBottom,
+      SSD1306_WHITE
+    );
+  }
+}
+
+// Very small 3x5 uppercase font used only for the signature.
+uint16_t tinyGlyph(char character) {
+  switch (character) {
+    case 'A': return 0b010101111101101;
+    case 'B': return 0b110101110101110;
+    case 'C': return 0b011100100100011;
+    case 'D': return 0b110101101101110;
+    case 'E': return 0b111100110100111;
+    case 'G': return 0b011100101101011;
+    case 'H': return 0b101101111101101;
+    case 'I': return 0b111010010010111;
+    case 'J': return 0b001001001101010;
+    case 'M': return 0b101111111101101;
+    case 'N': return 0b101111111111101;
+    case 'O': return 0b010101101101010;
+    case 'P': return 0b110101110100100;
+    case 'R': return 0b110101110101101;
+    case 'S': return 0b011100010001110;
+    case 'T': return 0b111010010010010;
+    case 'Y': return 0b101101010010010;
+    case '&': return 0b010101010101011;
+    case ' ': return 0;
+    default:  return 0;
+  }
+}
+
+void drawTinyText(int16_t x, int16_t y, const char *text) {
+  while (*text != '\0') {
+    uint16_t glyph = tinyGlyph(*text++);
+
+    for (uint8_t row = 0; row < 5; row++) {
+      for (uint8_t column = 0; column < 3; column++) {
+        uint8_t bitIndex = 14 - (row * 3 + column);
+
+        if (glyph & (1U << bitIndex)) {
+          display.drawPixel(x + column, y + row, SSD1306_WHITE);
+        }
+      }
+    }
+
+    x += 4;
+  }
+}
+
+void drawTinyTextCondensed(int16_t x, int16_t y, const char *text) {
+  while (*text != '\0') {
+    uint16_t glyph = tinyGlyph(*text++);
+
+    for (uint8_t row = 0; row < 5; row++) {
+      for (uint8_t column = 0; column < 3; column++) {
+        uint8_t bitIndex = 14 - (row * 3 + column);
+
+        if (glyph & (1U << bitIndex)) {
+          display.drawPixel(x + column, y + row, SSD1306_WHITE);
+        }
+      }
+    }
+
+    // No blank column: intentionally condensed to fit the lower-right corner.
+    x += 3;
+  }
+}
+
+void drawDirectionArrow(uint16_t joystickX, uint16_t joystickY) {
+  // Reverse only the OLED X direction so left appears left and right appears right.
+  // This does not change the rover control packet.
+  int32_t xDifference = 2048 - static_cast<int32_t>(joystickX);
+  int32_t yDifference = JOYSTICK_FORWARD_IS_LOW
+    ? 2048 - static_cast<int32_t>(joystickY)
+    : static_cast<int32_t>(joystickY) - 2048;
+
+  if (abs(xDifference) < DISPLAY_JOYSTICK_DEADZONE) {
+    xDifference = 0;
+  }
+
+  if (abs(yDifference) < DISPLAY_JOYSTICK_DEADZONE) {
+    yDifference = 0;
+  }
+
+  // When stopped, the arrow remains centred and points forward.
+  if (xDifference == 0 && yDifference == 0) {
+    yDifference = 2048;
+  }
+
+  float magnitude = sqrtf(
+    static_cast<float>(xDifference * xDifference) +
+    static_cast<float>(yDifference * yDifference)
+  );
+
+  if (magnitude < 1.0f) {
+    magnitude = 1.0f;
+  }
+
+  constexpr int16_t centreX = 109;
+  constexpr int16_t centreY = 34;
+  constexpr float arrowLength = 12.0f;
+  constexpr float headLength = 5.0f;
+  constexpr float headWidth = 3.0f;
+
+  float unitX = static_cast<float>(xDifference) / magnitude;
+  float unitY = -static_cast<float>(yDifference) / magnitude;
+
+  int16_t tipX = centreX + static_cast<int16_t>(unitX * arrowLength);
+  int16_t tipY = centreY + static_cast<int16_t>(unitY * arrowLength);
+
+  float perpendicularX = -unitY;
+  float perpendicularY = unitX;
+
+  int16_t headBaseX = tipX - static_cast<int16_t>(unitX * headLength);
+  int16_t headBaseY = tipY - static_cast<int16_t>(unitY * headLength);
+
+  int16_t leftX = headBaseX + static_cast<int16_t>(perpendicularX * headWidth);
+  int16_t leftY = headBaseY + static_cast<int16_t>(perpendicularY * headWidth);
+  int16_t rightX = headBaseX - static_cast<int16_t>(perpendicularX * headWidth);
+  int16_t rightY = headBaseY - static_cast<int16_t>(perpendicularY * headWidth);
+
+  // Only the arrow is shown; the surrounding circle was intentionally removed.
+  display.fillCircle(centreX, centreY, 2, SSD1306_WHITE);
+  display.drawLine(centreX, centreY, tipX, tipY, SSD1306_WHITE);
+  display.fillTriangle(tipX, tipY, leftX, leftY, rightX, rightY, SSD1306_WHITE);
+}
+
+uint8_t applyPercentageHysteresis(
+  uint8_t previousValue,
+  uint8_t newValue
+) {
+  newValue = constrain(newValue, 0, 100);
+
+  if (newValue == 0 || newValue == 100) {
+    return newValue;
+  }
+
+  if (
+    abs(static_cast<int16_t>(newValue) -
+        static_cast<int16_t>(previousValue)) >=
+    DISPLAY_PERCENT_HYSTERESIS
+  ) {
+    return newValue;
+  }
+
+  return previousValue;
+}
+
+uint8_t calculateDrivePercentage(
+  uint16_t joystickX,
+  uint16_t joystickY
+) {
+  int32_t xAmount = abs(
+    static_cast<int32_t>(joystickX) - 2048
+  );
+
+  int32_t yAmount = abs(
+    static_cast<int32_t>(joystickY) - 2048
+  );
+
+  int32_t strongestCommand = max(xAmount, yAmount);
+
+  if (strongestCommand < DISPLAY_JOYSTICK_DEADZONE) {
+    return 0;
+  }
+
+  return static_cast<uint8_t>(
+    constrain(
+      map(strongestCommand, 0, 2047, 0, 100),
+      0L,
+      100L
+    )
+  );
+}
+
+void drawHorizontalLever(
+  int16_t x,
+  int16_t y,
+  int16_t width,
+  uint8_t percentage
+) {
+  display.drawRoundRect(x, y, width, 7, 2, SSD1306_WHITE);
+
+  int16_t fillWidth = map(
+    percentage,
+    0,
+    100,
+    0,
+    width - 4
+  );
+
+  if (fillWidth > 0) {
+    display.fillRoundRect(
+      x + 2,
+      y + 2,
+      fillWidth,
+      3,
+      1,
+      SSD1306_WHITE
+    );
+  }
+}
+
+void updateOLED() {
+  if (!displayAvailable) {
+    return;
+  }
+
+  if (millis() - lastDisplayUpdateTime < DISPLAY_UPDATE_INTERVAL_MS) {
+    return;
+  }
+
+  lastDisplayUpdateTime = millis();
+
+  uint8_t newLimitPercentage = static_cast<uint8_t>(
+    map(currentSpeedPotValue, 0, 4095, 0, 100)
+  );
+
+  uint8_t newDrivePercentage = calculateDrivePercentage(
+    displayJoystickX,
+    displayJoystickY
+  );
+
+  stableLimitPercentage = applyPercentageHysteresis(
+    stableLimitPercentage,
+    newLimitPercentage
+  );
+
+  stableDrivePercentage = applyPercentageHysteresis(
+    stableDrivePercentage,
+    newDrivePercentage
+  );
+
+  bool connected = receiverConnected;
+  bool speakerActive = digitalRead(BUZZER_BUTTON_PIN) == LOW;
+
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+
+  // One-line status bar: circle/dot + ESP-NOW + bold cross/tick.
+  if (connected) {
+    display.fillCircle(3, 5, 3, SSD1306_WHITE);
+  } else {
+    display.drawCircle(3, 5, 3, SSD1306_WHITE);
+  }
+
+  display.setTextSize(1);
+  display.setCursor(9, 1);
+  display.print(F("ESP-NOW"));
+
+  if (connected) {
+    // Bold tick with a small gap after ESP-NOW.
+    display.drawLine(54, 5, 57, 8, SSD1306_WHITE);
+    display.drawLine(57, 8, 63, 1, SSD1306_WHITE);
+    display.drawLine(54, 4, 57, 7, SSD1306_WHITE);
+    display.drawLine(57, 7, 63, 0, SSD1306_WHITE);
+  } else {
+    // Bold cross with a small gap after ESP-NOW.
+    display.drawLine(55, 1, 62, 8, SSD1306_WHITE);
+    display.drawLine(62, 1, 55, 8, SSD1306_WHITE);
+    display.drawLine(56, 1, 63, 8, SSD1306_WHITE);
+    display.drawLine(63, 1, 56, 8, SSD1306_WHITE);
+  }
+
+  // Both icons are shifted to the far-right side.
+  drawLightIcon(92, 6, lightState);
+  drawSpeakerIcon(105, 6, speakerActive);
+
+  display.drawLine(0, 14, 127, 14, SSD1306_WHITE);
+
+  // SPEED label: clean, plain text with no heavy bold overdraw.
+  // It is positioned slightly lower for a visually larger, cleaner appearance.
+  display.setTextSize(1);
+  display.setCursor(1, 19);
+  display.print(F("SPEED"));
+
+  display.setTextSize(2);
+  display.setCursor(39, 16);
+  if (stableLimitPercentage < 10) {
+    display.print('0');
+  }
+  display.print(stableLimitPercentage);
+  display.print('%');
+
+  // SPEED and DRIVE levers use exactly the same dimensions.
+  drawHorizontalLever(1, 31, 91, stableLimitPercentage);
+
+  // DRIVE uses the same clean, plain font and alignment as SPEED.
+  display.setTextSize(1);
+  display.setCursor(1, 43);
+  display.print(F("DRIVE"));
+
+  display.setTextSize(2);
+  display.setCursor(39, 40);
+  if (stableDrivePercentage < 10) {
+    display.print('0');
+  }
+  display.print(stableDrivePercentage);
+  display.print('%');
+
+  drawHorizontalLever(1, 55, 91, stableDrivePercentage);
+
+  // Direction arrow remains unchanged.
+  drawDirectionArrow(displayJoystickX, displayJoystickY);
+
+  // Compact designer mark at the extreme lower-right corner.
+  // It uses the same text size as the ESP-NOW status text.
+  display.setTextSize(1);
+  display.setCursor(116, 56);
+  display.print(F("AS"));
+
+  display.display();
+}
+
+void drawCenteredBoldText(const char *text, int16_t y) {
+  int16_t x1, y1;
+  uint16_t width, height;
+
+  display.setTextSize(1);
+  display.getTextBounds(text, 0, y, &x1, &y1, &width, &height);
+
+  int16_t x = (OLED_WIDTH - static_cast<int16_t>(width)) / 2;
+
+  // Draw twice with a one-pixel offset for a bold appearance.
+  display.setCursor(x, y);
+  display.print(text);
+  display.setCursor(x + 1, y);
+  display.print(text);
+}
+
+
+void drawCenteredPlainText(const char *text, int16_t y) {
+  int16_t x1, y1;
+  uint16_t width, height;
+
+  display.setTextSize(1);
+  display.getTextBounds(text, 0, y, &x1, &y1, &width, &height);
+
+  int16_t x = (OLED_WIDTH - static_cast<int16_t>(width)) / 2;
+
+  display.setCursor(x, y);
+  display.print(text);
+}
+
+void showStartupScreen() {
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+
+  // Main project title: large-looking, centered and bold.
+  drawCenteredBoldText("MOBILE ROBOTIC", 5);
+  drawCenteredBoldText("MANIPULATOR", 18);
+
+  display.drawLine(14, 31, 113, 31, SSD1306_WHITE);
+
+  // Startup credit: simple, plain, non-bold text.
+  drawCenteredPlainText("PROJECT AND DESIGN", 43);
+  drawCenteredPlainText("BY AMAN SHARMA", 54);
+
+  display.display();
+
+  // Show this splash screen at every power-up for exactly two seconds.
+  delay(2000);
+}
+
+void setupOLED() {
+  Wire.begin(OLED_SDA_PIN, OLED_SCL_PIN);
+  Wire.setClock(400000);
+
+  displayAvailable = display.begin(
+    SSD1306_SWITCHCAPVCC,
+    OLED_I2C_ADDRESS
+  );
+
+  if (!displayAvailable) {
+    Serial.println(F("SSD1306 OLED initialization failed."));
+    return;
+  }
+
+  // The OLED is physically mounted upside down with its pins at the bottom.
+  display.setRotation(2);
+  showStartupScreen();
+}
 
 uint8_t calculateArmChecksum(const ArmFrame &frame) {
   const uint8_t *data =
@@ -189,20 +696,43 @@ uint16_t readSpeedPotentiometer() {
   rawSpeed = constrain(rawSpeed, 0, 4095);
 
   if (rawSpeed <= SPEED_POT_ZERO_THRESHOLD) {
-    return 0;
+    rawSpeed = 0;
+  } else {
+    rawSpeed = static_cast<uint16_t>(
+      map(
+        rawSpeed,
+        SPEED_POT_ZERO_THRESHOLD,
+        4095,
+        0,
+        4095
+      )
+    );
   }
 
-  return static_cast<uint16_t>(
-    map(
-      rawSpeed,
-      SPEED_POT_ZERO_THRESHOLD,
-      4095,
-      0,
-      4095
-    )
-  );
-}
+  // Low-pass filtering prevents ADC noise from making 22/23% flicker.
+  // The filter remains responsive enough for normal knob movement.
+  if (!speedPotFilterInitialized) {
+    filteredSpeedPotValue = rawSpeed;
+    speedPotFilterInitialized = true;
+  } else {
+    filteredSpeedPotValue = static_cast<uint16_t>(
+      (
+        static_cast<uint32_t>(filteredSpeedPotValue) * 3UL +
+        static_cast<uint32_t>(rawSpeed)
+      ) / 4UL
+    );
+  }
 
+  if (filteredSpeedPotValue < 20) {
+    filteredSpeedPotValue = 0;
+  }
+
+  if (filteredSpeedPotValue > 4075) {
+    filteredSpeedPotValue = 4095;
+  }
+
+  return filteredSpeedPotValue;
+}
 /*
   Converts the actual joystick centre reading to 2048.
 */
@@ -543,6 +1073,7 @@ void setup() {
     STM32_TX_PIN
   );
 
+  setupOLED();
   calibrateJoystick();
   setupESPNow();
 
@@ -567,6 +1098,7 @@ void loop() {
   readSTM32Data();
   updateLightButton();
   updateConnectionLed();
+  updateOLED();
 
   if (
     millis() - lastSendTime >=
@@ -616,6 +1148,10 @@ void loop() {
         centredJoystickY,
         currentSpeedPotValue
       );
+
+    // OLED direction and DRIVE lever follow the actual speed-limited command.
+    displayJoystickX = outgoingPacket.joystickX;
+    displayJoystickY = outgoingPacket.joystickY;
 
     for (uint8_t i = 0; i < NUMBER_OF_POTS; i++) {
       outgoingPacket.armPot[i] =
