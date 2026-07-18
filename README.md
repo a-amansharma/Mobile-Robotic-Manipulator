@@ -169,14 +169,8 @@ Mobile-Robotic-Manipulator/
 
 <img src="assets/images/both1.webp" width="46%">
 <img src="assets/images/manipulator.webp" width="46%">
-
-<br><br>
-
 <img src="assets/images/setup.webp" width="42%">
 <img src="assets/images/side-view.webp" width="42%">
-
-<br><br>
-
 <img src="assets/images/grip.webp" width="42%">
 <img src="assets/images/angle-view.webp" width="42%">
 
