@@ -1,74 +1,91 @@
 # Mobile Robotic Manipulator
 
-<p align="center">
-<img src="assets/images/main.webp" width="900">
-</p>
+<table>
+<tr>
+<td width="42%">
+
+<img src="assets/images/main.webp" width="100%">
+
+</td>
+
+<td width="58%">
+
+## 6-DOF Mobile Robotic Manipulator
+
+A modular robotics platform combining a **6-wheel unmanned ground vehicle (UGV)** with a **6-degree-of-freedom robotic manipulator** for wireless control, embedded systems research, autonomous experimentation, and object manipulation.
+
+Designed, engineered, programmed, assembled, tested, and documented entirely by **Aman Sharma**.
+
+### Current Features
+
+- 6-Wheel Differential Drive Rover
+- 6-DOF Robotic Arm
+- ESP-NOW Communication
+- Wi-Fi Control
+- MPU6050 Orientation Tracking
+- OLED Status Display
+- Modular Embedded Firmware
+
+</td>
+</tr>
+</table>
 
 <p align="center">
 
 ![Platform](https://img.shields.io/badge/Platform-ESP32-blue)
-![Language](https://img.shields.io/badge/Language-C%2B%2B-orange)
+![Language](https://img.shields.io/badge/Language-C++-orange)
 ![Status](https://img.shields.io/badge/Status-Active%20Development-success)
+![Version](https://img.shields.io/badge/Version-v1.0-brightgreen)
 ![License](https://img.shields.io/badge/License-All%20Rights%20Reserved-red)
 
 </p>
-
-A **6-DOF Mobile Robotic Manipulator** combining a six-wheel unmanned ground vehicle (UGV) with a six-degree-of-freedom robotic arm for wireless control, embedded robotics research, and object manipulation.
-
-Designed, engineered, programmed, assembled, tested, and documented entirely by **Aman Sharma**.
 
 ---
 
 # Overview
 
-The Mobile Robotic Manipulator has been developed as a modular robotics platform that integrates:
+The **Mobile Robotic Manipulator** is a self-designed robotics platform that integrates a six-wheel mobile robot with a six-degree-of-freedom robotic arm into a single modular system. The project focuses on embedded systems, wireless communication, robotic manipulation, and autonomous mobile robotics.
 
-- 6-Wheel Differential Drive Rover
-- 6-DOF Robotic Manipulator
-- ESP32 Wireless Communication
-- Wi-Fi Control
-- ESP-NOW Control
-- Motion Control
-- Real-Time Embedded Firmware
-- Modular Hardware Architecture
-- Robotics Research Platform
-
-Each subsystem has been designed and tested independently before complete system integration.
+Every subsystem—including the mechanical assembly, electronics integration, embedded firmware, communication protocols, documentation, and testing—has been developed from the ground up as part of a continuous engineering project.
 
 ---
 
 # Features
 
-- Six-wheel mobile robot
-- Six-degree-of-freedom robotic arm
-- Wireless ESP-NOW communication
-- Wi-Fi based control
-- MPU6050 orientation tracking
+- Six-wheel differential drive mobile platform
+- Six-degree-of-freedom robotic manipulator
+- ESP32-based wireless communication
+- ESP-NOW low-latency control
+- Wi-Fi browser-based control
+- MPU6050 orientation sensing
 - OLED status display
 - HC-SR04 obstacle detection
 - PCA9685 servo controller
 - Modular firmware architecture
+- Expandable hardware platform
 - Comprehensive documentation
 
 ---
 
 # Hardware
 
-- ESP32 Development Board
+- ESP32 Development Boards
 - NodeMCU-32S ESP32
 - STM32F103 Blue Pill
 - PCA9685 Servo Driver
 - MPU6050 IMU
 - HC-SR04 Ultrasonic Sensor
-- SSD1306 OLED
+- SSD1306 OLED Display
 - IBT-2 Motor Drivers
 - MG996R Servo Motors
 - MG90S Servo Motors
-- Lithium Battery System
+- Lithium Battery Power System
 
 ---
 
+# Repository Structure
 
+```text
 Mobile-Robotic-Manipulator/
 │
 ├── assets/
@@ -110,13 +127,6 @@ Mobile-Robotic-Manipulator/
 │
 ├── README.md
 └── .gitignore
-
-
-
-# Repository Structure
-
-```text
-(Updated repository structure here)
 ```
 
 ---
@@ -125,13 +135,13 @@ Mobile-Robotic-Manipulator/
 
 | Document | Description |
 |----------|-------------|
-| Hardware | Hardware overview |
-| Wiring | Complete wiring guide |
-| Build Guide | Assembly instructions |
-| Power System | Power architecture |
-| Bill of Materials | Components list |
-| Troubleshooting | Common issues |
-| Development Roadmap | Future plans |
+| **hardware.md** | Hardware overview and components |
+| **wiring.md** | Complete transmitter and receiver wiring |
+| **build-guide.md** | Mechanical assembly guide |
+| **power-system.md** | Battery and power distribution |
+| **bill-of-materials.md** | Complete component list |
+| **troubleshooting.md** | Common issues and fixes |
+| **development-roadmap.md** | Upcoming features and milestones |
 
 ---
 
@@ -144,26 +154,31 @@ Mobile-Robotic-Manipulator/
 
 ### Wi-Fi Control
 
-- Complete mobile robot control firmware
+- Browser-based mobile robot control firmware
 
 ### Tests
 
 - MPU6050 orientation test
-- Processing 3D visualizer
+- Processing 3D orientation visualizer
 
 ---
 
-# Gallery
+# Project Gallery
 
 <p align="center">
 
-<img src="assets/images/main.webp" width="45%">
-<img src="assets/images/both1.webp" width="45%">
+<img src="assets/images/both1.webp" width="46%">
+<img src="assets/images/manipulator.webp" width="46%">
 
 <br><br>
 
-<img src="assets/images/manipulator.webp" width="45%">
-<img src="assets/images/setup.webp" width="45%">
+<img src="assets/images/setup.webp" width="46%">
+<img src="assets/images/side-view.webp" width="46%">
+
+<br><br>
+
+<img src="assets/images/grip.webp" width="46%">
+<img src="assets/images/angle-view.webp" width="46%">
 
 </p>
 
@@ -171,33 +186,37 @@ Mobile-Robotic-Manipulator/
 
 # Project Status
 
-🟢 Active Development
+🟢 **Active Development**
 
-Current repository includes:
+Currently available in this repository:
 
-- Wi-Fi Control
-- ESP-NOW Firmware
-- Hardware Documentation
-- Wiring Documentation
-- MPU6050 Testing
+- ESP-NOW Communication Firmware
+- Wi-Fi Control Firmware
+- MPU6050 Orientation Test
 - Processing 3D Visualizer
+- Complete Hardware Documentation
+- Wiring Documentation
+- Bill of Materials
+- Build Guide
+- Development Roadmap
+- Troubleshooting Guide
 
-Additional firmware, documentation, hardware improvements, and new features will continue to be added as development progresses.
-
----
-
-# Notice
-
-This repository is **not open source**.
-
-The complete hardware architecture, firmware, software, documentation, mechanical design, and system integration are original work created solely by **Aman Sharma**.
-
-Please do not copy, redistribute, or reproduce any part of this project without prior permission.
+Additional firmware, hardware improvements, documentation, and new features will continue to be added as the project evolves.
 
 ---
 
 # Author
 
-## Aman Sharma
+**Aman Sharma**
 
-Embedded Systems • Robotics • Mechatronics • Computer Vision
+**Embedded Systems • Robotics • Mechatronics • Computer Vision**
+
+---
+
+# Notice
+
+This project is **not open source**.
+
+The complete hardware architecture, firmware, electronics, documentation, mechanical integration, software, and overall system design are original work created solely by **Aman Sharma**.
+
+Please do not copy, redistribute, or reproduce any part of this project without prior permission.
