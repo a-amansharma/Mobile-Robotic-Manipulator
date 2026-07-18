@@ -161,14 +161,39 @@ Reads user inputs and sends commands wirelessly to the receiver.
 | VCC | 3.3V |
 | GND | GND |
 
----
+--- 
 
-## Push Buttons
 
-| Button | ESP32 |
-|---------|-------|
-| Headlight | GPIO25 |
-| Buzzer | GPIO33 |
+
+# OPTIONAL UPGRADE
+## MOSFET Control (For horn and light)
+
+| Function | ESP32 GPIO |
+|----------|------------|
+| Headlight MOSFET Gate | GPIO25 |
+| Buzzer MOSFET Gate | GPIO33 |
+
+### MOSFET Wiring (N-Channel)
+
+```
+Flat Side Facing You
+
+ ┌───────────┐
+ │           │
+ └───────────┘
+   1   2   3
+   G   D   S
+
+G → ESP32 GPIO (via 220Ω resistor)
+D → Load Negative (-)
+S → GND
+
+Load Positive (+) → Battery Positive
+```
+
+> **Recommended MOSFETs:** IRLZ44N, IRLB8721, FQP30N06L, IRLZ34N, AO3400A (SMD).
+>
+> **Note:** Use a 220Ω gate resistor and a 10kΩ pull-down resistor from Gate to GND for reliable switching.
 
 ---
 
